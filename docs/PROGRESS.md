@@ -28,7 +28,7 @@
 
 ## 1. Current focus
 
-> Slice 3: Read-only tools (agent can explore a repo).
+> Slice 4: Edit + approve (safe code modifications with human-in-the-loop review).
 
 ---
 
@@ -79,31 +79,31 @@ _Goal: first demoable thing. Streaming chat, no tools yet._
 
 **Exit check:** `forge` opens, streams a multi-paragraph answer with a highlighted code block, and `Esc` stops it cleanly.
 
-### Slice 3: Read-only tools (agent can explore a repo) `TODO`
+### Slice 3: Read-only tools (agent can explore a repo) `DONE`
 
 _Goal: the agent can answer questions about a codebase._
 
-- [ ] Tool registry and JSON-schema declaration
-- [ ] `read_file` (line ranges, size cap, binary check, truncation marker)
-- [ ] `list_dir` / `glob` (respects `.gitignore`, `**` support, sorted)
-- [ ] `grep` (pure Go regex search, skips binary/ignored paths, truncation marker)
-- [ ] Workspace path confinement `SEC-8`
-- [ ] Tool output truncation with "more available" marker
-- [ ] Tool-call cards in TUI (status, duration, collapsible `Ctrl+O`) `T-2`
-- [ ] `AGENTS.md` / `CLAUDE.md` loaded into the system prompt `S-5`
+- [x] Tool registry and JSON-schema declaration
+- [x] `read_file` (line ranges, size cap, binary check, truncation marker)
+- [x] `list_dir` / `glob` (respects `.gitignore`, `**` support, sorted)
+- [x] `grep` (pure Go regex search, skips binary/ignored paths, truncation marker)
+- [x] Workspace path confinement `SEC-8`
+- [x] Tool output truncation with "more available" marker
+- [x] Tool-call cards in TUI (status, duration, collapsible `Ctrl+O`) `T-2`
+- [x] `AGENTS.md` / `CLAUDE.md` loaded into the system prompt `S-5`
 
 **Exit check:** "Explain how this repo is structured" works on a fixture repo, with visible tool cards and no writes.
 
-### Slice 3b: Multi-provider: OpenAI + Gemini `TODO`
+### Slice 3b: Multi-provider: OpenAI + Gemini `DONE`
 
 _Goal: provider-agnostic core with OpenAI and Gemini streaming, catalog, and shared retry/contract suite._
 
-- [ ] Shared provider contract test suite (`httptest` recorded SSE fixtures)
-- [ ] Shared retry/backoff package (`internal/llm/retry`)
-- [ ] OpenAI provider with streaming and tool calls (`L-3`)
-- [ ] Gemini provider with streaming and schema sanitizer (`L-4`)
-- [ ] Layered config `--provider` and `--model` wiring with factory
-- [ ] Token cost tracking and display in TUI footer
+- [x] Shared provider contract test suite (`httptest` recorded SSE fixtures)
+- [x] Shared retry/backoff package (`internal/llm/retry`)
+- [x] OpenAI provider with streaming and tool calls (`L-3`)
+- [x] Gemini provider with streaming and schema sanitizer (`L-4`)
+- [x] Layered config `--provider` and `--model` wiring with factory
+- [x] Token cost tracking and display in TUI footer
 
 **Exit check:** the provider contract test suite passes for Anthropic, OpenAI, and Gemini under `-race`.
 
@@ -169,6 +169,8 @@ Newest first. Format: `YYYY-MM-DD · Slice N · what was done · evidence (commi
 
 | Date       | Slice | What                                                                                                                      | Evidence                                              |
 | ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| 2026-11-12 | 3b    | Multi-provider support (OpenAI `/v1/chat/completions`, Gemini Developer API with schema sanitizer), shared `internal/llm/retry`, provider factory `llm.NewProvider`, `--provider`/`--model` flags, TUI token cost tracking | All 10 contract suite tests pass for Anthropic, OpenAI, Gemini under `-race`; commit 0f8ea60 |
+| 2026-11-12 | 3     | Read-only tools (`read_file`, `list_dir`, `glob`, `grep`), SEC-8 workspace path confinement, SEC-1 system prompt with `AGENTS.md` / `CLAUDE.md`, collapsible tool cards (`Ctrl+O`) in TUI | `TestExplainRepoStructureEndToEnd` fixture test and tool card tests pass under `-race`; commit 93ae114 |
 | 2026-11-12 | 2     | Anthropic streaming provider (raw HTTP+SSE, retry with backoff/jitter, models catalog), Bubble Tea TUI (viewport, textarea, spinner, Glamour/Chroma markdown), CLI wiring | Unit/TUI/race tests pass, commit d0cd438             |
 | 2026-11-12 | 1     | Core contracts (`Session`, `Provider`, `Tool`, typed `Event` payloads), mock replay provider, agent loop with cancellation, loop guards (max turns and repeated calls), full unit/loop tests | `TestScriptedTranscriptWithTwoToolCallsRunsToDone` and `TestCancellationWithContext` pass; commit 3293d66 |
 | 2026-11-12 | 0     | Skeleton, Cobra CLI (`--version`), CI workflow (Linux/macOS/Windows), Makefile, layered config loader (defaults/user/project/env/flags) | `go build ./... && go test ./...` pass; commit 1d25f9a |
@@ -199,6 +201,10 @@ Record anything that deviates from, resolves, or adds to `SPEC.md`. Newest first
 
 | Date       | Decision                                                                 | Reason                                                                             | Spec impact        |
 | ---------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- | ------------------ |
+| 2026-11-12 | Gemini Developer API with JSON schema sanitizer                          | Direct API key access via GEMINI_API_KEY/GOOGLE_API_KEY without GCP project setup   | `internal/llm/gemini` |
+| 2026-11-12 | OpenAI Chat Completions API (`/v1/chat/completions`) for OpenAI provider | Maximum compatibility across OpenAI proxies (Ollama, vLLM, OpenRouter, LocalAI)   | `internal/llm/openai` |
+| 2026-11-12 | Provider factory registry pattern (`llm.RegisterProvider`)               | Avoids circular import cycles between `internal/llm` and individual provider pkgs  | `internal/llm`     |
+| 2026-11-12 | Official OpenAI & Gemini live model catalogs & pricing                   | Up-to-date specs: `gpt-4o` ($2.50/$10), `gemini-2.5-pro` ($1.25/$10); retired removed | `internal/llm`     |
 | 2026-11-12 | Headless execution path `forge [prompt]`                                 | Retained from prototype for non-interactive scripts; scoped without extension      | `cmd/forge`        |
 | 2026-11-12 | Updated Anthropic catalog to 5.x lineup (default `claude-sonnet-5-5`)    | Official docs (https://docs.anthropic.com/en/docs/about-claude/models); retired 3.x removed | `internal/llm/anthropic` |
 | 2026-11-12 | Raw HTTP + SSE for Anthropic provider                                    | SPEC §11, zero SDK dependencies, complete control over retries, backoff, and events | `internal/llm/anthropic` |
@@ -220,6 +226,6 @@ _Convert a `_pending_` row to a dated row when decided. If a decision changes a 
 
 ## 6. Next 3 actions
 
-1. Slice 3: implement Tool registry and JSON-schema declaration for read-only tools (`read_file`, `list_dir`, `glob`, `grep`).
-2. Slice 3: implement workspace path confinement (`SEC-8`) and output truncation with "more available" marker.
-3. Slice 3: build collapsible tool-call cards in the TUI (`T-2`) and load `AGENTS.md` into the system prompt (`S-5`).
+1. Slice 4: Implement `edit_file` with exact unique-match search/replace and actionable error messages.
+2. Slice 4: Implement `write_file` and unified diff generation for human-in-the-loop approval requests (`P-2`).
+3. Slice 4: Build interactive diff view in Bubble Tea TUI with approve / reject keybindings (`T-3`) and permission modes (`P-1`).
