@@ -45,3 +45,4 @@ func TestOpenAIModelsCatalog(t *testing.T) {
 		t.Error("default model gpt-4o not found in catalog")
 	}
 }
+

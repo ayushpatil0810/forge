@@ -142,7 +142,7 @@ type anthropicTool struct {
 
 type anthropicMessage struct {
 	Role    string `json:"role"`
-	Content string `json:"content"`
+	Content any    `json:"content"`
 }
 
 type anthropicRequest struct {
@@ -189,14 +189,57 @@ func (p *Provider) Stream(ctx context.Context, req llm.Request) (<-chan llm.Stre
 	}
 
 	for _, m := range req.Messages {
-		role := string(m.Role)
-		if m.Role == llm.RoleTool {
-			role = "user"
+		switch m.Role {
+		case llm.RoleUser:
+			bodyObj.Messages = append(bodyObj.Messages, anthropicMessage{
+				Role:    "user",
+				Content: m.Text,
+			})
+		case llm.RoleAssistant:
+			if len(m.ToolCalls) == 0 {
+				bodyObj.Messages = append(bodyObj.Messages, anthropicMessage{
+					Role:    "assistant",
+					Content: m.Text,
+				})
+			} else {
+				var blocks []any
+				if m.Text != "" {
+					blocks = append(blocks, map[string]any{"type": "text", "text": m.Text})
+				}
+				for _, tc := range m.ToolCalls {
+					var inputObj any
+					if len(tc.Input) > 0 {
+						_ = json.Unmarshal(tc.Input, &inputObj)
+					}
+					if inputObj == nil {
+						inputObj = map[string]any{}
+					}
+					blocks = append(blocks, map[string]any{
+						"type":  "tool_use",
+						"id":    tc.ID,
+						"name":  tc.Name,
+						"input": inputObj,
+					})
+				}
+				bodyObj.Messages = append(bodyObj.Messages, anthropicMessage{
+					Role:    "assistant",
+					Content: blocks,
+				})
+			}
+		case llm.RoleTool:
+			block := map[string]any{
+				"type":        "tool_result",
+				"tool_use_id": m.ToolCallID,
+				"content":     m.Text,
+			}
+			if m.IsError {
+				block["is_error"] = true
+			}
+			bodyObj.Messages = append(bodyObj.Messages, anthropicMessage{
+				Role:    "user",
+				Content: []any{block},
+			})
 		}
-		bodyObj.Messages = append(bodyObj.Messages, anthropicMessage{
-			Role:    role,
-			Content: m.Text,
-		})
 	}
 
 	bodyBytes, err := json.Marshal(bodyObj)
