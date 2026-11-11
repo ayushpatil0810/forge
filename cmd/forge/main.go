@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -13,8 +14,10 @@ import (
 	"github.com/ayushpatil0810/forge/internal/agent"
 	"github.com/ayushpatil0810/forge/internal/config"
 	"github.com/ayushpatil0810/forge/internal/llm"
-	"github.com/ayushpatil0810/forge/internal/llm/anthropic"
+	_ "github.com/ayushpatil0810/forge/internal/llm/anthropic"
+	_ "github.com/ayushpatil0810/forge/internal/llm/gemini"
 	"github.com/ayushpatil0810/forge/internal/llm/mock"
+	_ "github.com/ayushpatil0810/forge/internal/llm/openai"
 	"github.com/ayushpatil0810/forge/internal/permission"
 	"github.com/ayushpatil0810/forge/internal/tools"
 	"github.com/ayushpatil0810/forge/internal/tui"
@@ -23,10 +26,11 @@ import (
 var (
 	version = "0.1.0-dev"
 
-	rootFlag  string
-	demoFlag  bool
-	yesFlag   bool
-	modelFlag string
+	rootFlag     string
+	demoFlag     bool
+	yesFlag      bool
+	providerFlag string
+	modelFlag    string
 )
 
 func newRootCmd() *cobra.Command {
@@ -46,6 +50,7 @@ func newRootCmd() *cobra.Command {
 	cmd.Flags().StringVar(&rootFlag, "root", ".", "workspace root directory")
 	cmd.Flags().BoolVar(&demoFlag, "demo", false, "use a scripted mock provider (no API key needed)")
 	cmd.Flags().BoolVar(&yesFlag, "yes", false, "auto-approve every action")
+	cmd.Flags().StringVar(&providerFlag, "provider", "", "LLM provider: anthropic, openai, gemini, mock (overrides config)")
 	cmd.Flags().StringVar(&modelFlag, "model", "", "model ID to use (overrides config)")
 
 	return cmd
@@ -54,6 +59,7 @@ func newRootCmd() *cobra.Command {
 func runForge(ctx context.Context, prompt string) error {
 	cfg, err := config.Load(config.LoadOptions{
 		WorkspaceRoot: rootFlag,
+		Provider:      providerFlag,
 		Model:         modelFlag,
 	})
 	if err != nil {
@@ -62,9 +68,16 @@ func runForge(ctx context.Context, prompt string) error {
 
 	var provider llm.Provider
 	var providerName, modelName string
+
 	if demoFlag {
 		providerName = "mock"
 		modelName = "demo"
+		sampleFile := "go.mod"
+		if _, err := os.Stat(filepath.Join(cfg.WorkspaceRoot, "go.mod")); err != nil {
+			if _, err := os.Stat(filepath.Join(cfg.WorkspaceRoot, "main.go")); err == nil {
+				sampleFile = "main.go"
+			}
+		}
 		provider = mock.New(
 			mock.Turn{
 				mock.Text("Let me inspect the workspace directory structure first.\n"),
@@ -75,23 +88,24 @@ func runForge(ctx context.Context, prompt string) error {
 				mock.ToolUse("demo2", "grep", map[string]any{"query": "func main"}),
 			},
 			mock.Turn{
-				mock.Text("Reading module configuration file `go.mod`:\n"),
-				mock.ToolUse("demo3", "read_file", map[string]any{"path": "go.mod", "limit": 10}),
+				mock.Text(fmt.Sprintf("Reading project configuration file `%s`:\n", sampleFile)),
+				mock.ToolUse("demo3", "read_file", map[string]any{"path": sampleFile, "limit": 10}),
 			},
 			mock.Turn{
 				mock.Text("I have explored your workspace! Here is what I discovered:\n\n- Directory contents retrieved using `list_dir`.\n- Located application entrypoints using `grep`.\n- Inspected module dependencies with `read_file`.\n\nPress **Ctrl+O** to toggle between collapsed and expanded tool call cards!"),
 			},
 		)
 	} else {
-		providerName = "anthropic"
+		providerName = cfg.Provider
 		modelName = cfg.Model
-		anthropicProvider, err := anthropic.New(anthropic.Config{
-			Model: cfg.Model,
+		p, err := llm.NewProvider(llm.ProviderConfig{
+			Provider: cfg.Provider,
+			Model:    cfg.Model,
 		})
 		if err != nil {
 			return err
 		}
-		provider = anthropicProvider
+		provider = p
 	}
 
 	systemPrompt := cfg.SystemPrompt
@@ -150,21 +164,20 @@ func runForge(ctx context.Context, prompt string) error {
 			if ev.ToolDone != nil {
 				fmt.Printf("  ↳ %s (%dms)\n", ev.ToolDone.Status, ev.ToolDone.DurationMs)
 			}
+		case agent.EventDone:
+			return nil
 		case agent.EventError:
 			if ev.Err != nil {
 				return fmt.Errorf("error [%s]: %s", ev.Err.Code, ev.Err.Message)
 			}
-			return fmt.Errorf("unknown error")
-		case agent.EventDone:
-			return nil
+			return fmt.Errorf("agent error")
 		}
 	}
 	return nil
 }
 
 func main() {
-	cmd := newRootCmd()
-	if err := cmd.Execute(); err != nil {
+	if err := newRootCmd().Execute(); err != nil {
 		os.Exit(1)
 	}
 }

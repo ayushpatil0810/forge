@@ -213,3 +213,4 @@ func (g Grep) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 
 	return Result{Output: strings.TrimRight(b.String(), "\n")}, nil
 }
+

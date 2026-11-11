@@ -34,6 +34,12 @@ func Error(err error) llm.StreamEvent {
 	return llm.StreamEvent{Type: llm.StreamError, Err: err}
 }
 
+func init() {
+	llm.RegisterProvider("mock", func(cfg llm.ProviderConfig) (llm.Provider, error) {
+		return New(), nil
+	})
+}
+
 type Provider struct {
 	mu       sync.Mutex
 	turns    []Turn

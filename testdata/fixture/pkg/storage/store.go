@@ -4,3 +4,4 @@ package storage
 type Store struct {
 	data map[string]string
 }
+

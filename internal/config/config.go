@@ -11,6 +11,7 @@ import (
 
 // Config holds agent configuration parameters across layers.
 type Config struct {
+	Provider       string `json:"provider,omitempty"`
 	Model          string `json:"model,omitempty"`
 	MaxTurns       int    `json:"max_turns,omitempty"`
 	MaxTokens      int    `json:"max_tokens,omitempty"`
@@ -25,6 +26,7 @@ type LoadOptions struct {
 	UserConfigFile    string
 	ProjectConfigFile string
 	WorkspaceRoot     string
+	Provider          string
 	Model             string
 	PermissionMode    string
 	MaxTurns          int
@@ -33,9 +35,24 @@ type LoadOptions struct {
 	SystemPrompt      string
 }
 
+// DefaultModelForProvider returns the sensible default model ID for a given provider.
+func DefaultModelForProvider(p string) string {
+	switch strings.ToLower(p) {
+	case "openai":
+		return "gpt-4o"
+	case "gemini":
+		return "gemini-2.5-pro"
+	case "mock":
+		return "mock-model"
+	default:
+		return "claude-sonnet-5-5"
+	}
+}
+
 // DefaultConfig returns sensible hardcoded defaults.
 func DefaultConfig() Config {
 	return Config{
+		Provider:       "anthropic",
 		Model:          "claude-sonnet-5-5",
 		MaxTurns:       40,
 		MaxTokens:      4096,
@@ -112,6 +129,13 @@ func mergeFile(dst *Config, path string) error {
 }
 
 func merge(dst *Config, src Config) {
+	if src.Provider != "" {
+		oldProvider := dst.Provider
+		dst.Provider = src.Provider
+		if src.Model == "" && oldProvider != src.Provider {
+			dst.Model = DefaultModelForProvider(src.Provider)
+		}
+	}
 	if src.Model != "" {
 		dst.Model = src.Model
 	}
@@ -136,6 +160,13 @@ func merge(dst *Config, src Config) {
 }
 
 func applyEnv(dst *Config) {
+	if v := os.Getenv("FORGE_PROVIDER"); v != "" {
+		oldProvider := dst.Provider
+		dst.Provider = v
+		if os.Getenv("FORGE_MODEL") == "" && oldProvider != v {
+			dst.Model = DefaultModelForProvider(v)
+		}
+	}
 	if v := os.Getenv("FORGE_MODEL"); v != "" {
 		dst.Model = v
 	}
@@ -164,6 +195,13 @@ func applyEnv(dst *Config) {
 }
 
 func applyOptions(dst *Config, opts LoadOptions) {
+	if opts.Provider != "" {
+		oldProvider := dst.Provider
+		dst.Provider = opts.Provider
+		if opts.Model == "" && oldProvider != opts.Provider {
+			dst.Model = DefaultModelForProvider(opts.Provider)
+		}
+	}
 	if opts.Model != "" {
 		dst.Model = opts.Model
 	}
@@ -186,4 +224,3 @@ func applyOptions(dst *Config, opts LoadOptions) {
 		dst.SystemPrompt = opts.SystemPrompt
 	}
 }
-

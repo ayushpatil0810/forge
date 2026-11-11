@@ -130,3 +130,4 @@ func (tc *ToolCard) Render(width int, expanded bool, styles Styles) string {
 	cardBox := styles.BorderBox.Width(width - 4).Render(strings.TrimRight(content.String(), "\n"))
 	return cardBox
 }
+

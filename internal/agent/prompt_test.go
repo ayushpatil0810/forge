@@ -65,3 +65,4 @@ func TestBuildSystemPromptPrefersAgentsOverClaude(t *testing.T) {
 		t.Errorf("did not expect CLAUDE.md when AGENTS.md is present")
 	}
 }
+

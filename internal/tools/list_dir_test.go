@@ -78,3 +78,4 @@ func TestListDirRecursive(t *testing.T) {
 		t.Errorf("expected src/pkg/lib.go in recursive listing, got:\n%s", res.Output)
 	}
 }
+

@@ -163,3 +163,4 @@ func (l ListDir) Run(_ context.Context, input json.RawMessage) (Result, error) {
 
 	return Result{Output: strings.TrimRight(b.String(), "\n")}, nil
 }
+

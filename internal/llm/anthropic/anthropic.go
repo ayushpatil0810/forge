@@ -10,14 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ayushpatil0810/forge/internal/llm"
+	"github.com/ayushpatil0810/forge/internal/llm/retry"
 )
 
 // Source documentation:
@@ -28,10 +27,10 @@ const (
 	defaultAPIVersion = "2023-06-01"
 	// Default model is claude-sonnet-5-5: active flagship offering the optimal
 	// balance of reasoning capability, 1M context window, and price ($2/M in, $10/M out).
-	defaultModel      = "claude-sonnet-5-5"
-	maxRetries        = 3
-	initialBackoff    = 300 * time.Millisecond
-	maxBackoff        = 8 * time.Second
+	defaultModel   = "claude-sonnet-5-5"
+	maxRetries     = 3
+	initialBackoff = 300 * time.Millisecond
+	maxBackoff     = 8 * time.Second
 )
 
 // Active, non-deprecated Anthropic models per official documentation.
@@ -67,7 +66,17 @@ var catalog = []llm.ModelInfo{
 	},
 }
 
-// Config configures the Anthropic provider.
+func init() {
+	llm.RegisterProvider("anthropic", func(cfg llm.ProviderConfig) (llm.Provider, error) {
+		return New(Config{
+			APIKey:   cfg.APIKey,
+			Model:    cfg.Model,
+			Endpoint: cfg.BaseURL,
+		})
+	})
+}
+
+// Config holds Anthropic provider configuration options.
 type Config struct {
 	APIKey   string
 	Model    string
@@ -75,7 +84,7 @@ type Config struct {
 	Client   *http.Client
 }
 
-// Provider implements llm.Provider.
+// Provider implements llm.Provider for Anthropic.
 type Provider struct {
 	apiKey   string
 	model    string
@@ -83,14 +92,15 @@ type Provider struct {
 	client   *http.Client
 }
 
-// New creates an Anthropic provider. It reads ANTHROPIC_API_KEY from environment if not provided.
+// New creates a new Anthropic provider.
+// Fails fast with a friendly error if ANTHROPIC_API_KEY is not set.
 func New(cfg Config) (*Provider, error) {
-	key := cfg.APIKey
-	if key == "" {
-		key = os.Getenv("ANTHROPIC_API_KEY")
+	apiKey := cfg.APIKey
+	if apiKey == "" {
+		apiKey = os.Getenv("ANTHROPIC_API_KEY")
 	}
-	if key == "" {
-		return nil, errors.New("ANTHROPIC_API_KEY environment variable is not set; please set it or run with --demo")
+	if strings.TrimSpace(apiKey) == "" {
+		return nil, errors.New("anthropic: ANTHROPIC_API_KEY environment variable is required; please set it or specify --api-key")
 	}
 
 	model := cfg.Model
@@ -105,11 +115,11 @@ func New(cfg Config) (*Provider, error) {
 
 	client := cfg.Client
 	if client == nil {
-		client = &http.Client{Timeout: 0} // No timeout on client; turn context controls duration
+		client = &http.Client{Timeout: 60 * time.Second}
 	}
 
 	return &Provider{
-		apiKey:   key,
+		apiKey:   apiKey,
 		model:    model,
 		endpoint: endpoint,
 		client:   client,
@@ -124,6 +134,12 @@ func (p *Provider) Models() []llm.ModelInfo {
 	return catalog
 }
 
+type anthropicTool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema"`
+}
+
 type anthropicMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
@@ -134,7 +150,17 @@ type anthropicRequest struct {
 	MaxTokens int                `json:"max_tokens"`
 	System    string             `json:"system,omitempty"`
 	Messages  []anthropicMessage `json:"messages"`
+	Tools     []anthropicTool    `json:"tools,omitempty"`
 	Stream    bool               `json:"stream"`
+}
+
+func (p *Provider) calculateCost(usage *llm.Usage) float64 {
+	for _, m := range catalog {
+		if m.ID == p.model {
+			return (float64(usage.InputTokens)*m.InputPrice + float64(usage.OutputTokens)*m.OutputPrice) / 1_000_000
+		}
+	}
+	return 0
 }
 
 func (p *Provider) Stream(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, error) {
@@ -152,6 +178,14 @@ func (p *Provider) Stream(ctx context.Context, req llm.Request) (<-chan llm.Stre
 		MaxTokens: maxTokens,
 		System:    req.System,
 		Stream:    true,
+	}
+
+	for _, t := range req.Tools {
+		bodyObj.Tools = append(bodyObj.Tools, anthropicTool{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: t.Schema,
+		})
 	}
 
 	for _, m := range req.Messages {
@@ -178,138 +212,112 @@ func (p *Provider) Stream(ctx context.Context, req llm.Request) (<-chan llm.Stre
 func (p *Provider) streamWithRetry(ctx context.Context, bodyBytes []byte, ch chan<- llm.StreamEvent) {
 	defer close(ch)
 
-	backoff := initialBackoff
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		resp, retryable, err := p.sendRequest(ctx, bodyBytes)
-		if err != nil {
-			if !retryable || attempt == maxRetries {
-				select {
-				case ch <- llm.StreamEvent{Type: llm.StreamError, Err: err}:
-				case <-ctx.Done():
-				}
-				return
-			}
+	retryCfg := retry.Config{
+		MaxRetries:     maxRetries,
+		InitialBackoff: initialBackoff,
+		MaxBackoff:     maxBackoff,
+	}
 
-			// Calculate backoff with jitter
-			sleepDuration := backoff + time.Duration(rand.Int63n(int64(backoff/2)))
-			backoff *= 2
-			if backoff > maxBackoff {
-				backoff = maxBackoff
-			}
-
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(sleepDuration):
-				continue
-			}
+	resp, err := retry.Do(ctx, retryCfg, func(opCtx context.Context) (*http.Response, bool, time.Duration, error) {
+		httpReq, reqErr := http.NewRequestWithContext(opCtx, http.MethodPost, p.endpoint, bytes.NewReader(bodyBytes))
+		if reqErr != nil {
+			return nil, false, 0, reqErr
 		}
 
-		// Response received; process streaming body.
-		// Once streaming begins, retries are no longer attempted (A-8).
-		err = parseSSEStream(ctx, resp.Body, ch)
-		_ = resp.Body.Close()
-		if err != nil {
-			select {
-			case ch <- llm.StreamEvent{Type: llm.StreamError, Err: err}:
-			case <-ctx.Done():
+		httpReq.Header.Set("x-api-key", p.apiKey)
+		httpReq.Header.Set("anthropic-version", defaultAPIVersion)
+		httpReq.Header.Set("content-type", "application/json")
+		httpReq.Header.Set("accept", "text/event-stream")
+
+		res, doErr := p.client.Do(httpReq)
+		if doErr != nil {
+			if opCtx.Err() != nil {
+				return nil, false, 0, opCtx.Err()
 			}
+			return nil, true, 0, fmt.Errorf("anthropic connection error: %w", doErr)
+		}
+
+		if res.StatusCode == http.StatusOK {
+			return res, false, 0, nil
+		}
+
+		defer res.Body.Close()
+		respBody, _ := io.ReadAll(res.Body)
+
+		isRetryable := retry.IsRetryableStatus(res.StatusCode)
+		retryAfter := retry.ParseRetryAfter(res.Header.Get("Retry-After"))
+
+		var errMsg string
+		var errResp struct {
+			Error struct {
+				Type    string `json:"type"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(respBody, &errResp) == nil && errResp.Error.Message != "" {
+			errMsg = fmt.Sprintf("anthropic API error (%d %s): %s", res.StatusCode, errResp.Error.Type, errResp.Error.Message)
 		} else {
-			select {
-			case ch <- llm.StreamEvent{Type: llm.StreamDone}:
-			case <-ctx.Done():
-			}
+			errMsg = fmt.Sprintf("anthropic API error (%d): %s", res.StatusCode, strings.TrimSpace(string(respBody)))
+		}
+
+		return nil, isRetryable, retryAfter, errors.New(errMsg)
+	})
+
+	if err != nil {
+		select {
+		case ch <- llm.StreamEvent{Type: llm.StreamError, Err: err}:
+		case <-ctx.Done():
 		}
 		return
 	}
-}
-
-func (p *Provider) sendRequest(ctx context.Context, bodyBytes []byte) (*http.Response, bool, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, false, err
-	}
-
-	httpReq.Header.Set("x-api-key", p.apiKey)
-	httpReq.Header.Set("anthropic-version", defaultAPIVersion)
-	httpReq.Header.Set("content-type", "application/json")
-	httpReq.Header.Set("accept", "text/event-stream")
-
-	resp, err := p.client.Do(httpReq)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, false, ctx.Err()
-		}
-		// Network errors are retryable
-		return nil, true, fmt.Errorf("anthropic connection error: %w", err)
-	}
-
-	if resp.StatusCode == http.StatusOK {
-		return resp, false, nil
-	}
 
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
-
-	// Determine retryability per requirement A-8:
-	// Retry on 429, 5xx, and 529 (overloaded). Do NOT retry 400, 401, etc.
-	status := resp.StatusCode
-	isRetryable := status == 429 || status == 529 || (status >= 500 && status <= 599)
-
-	var errMsg string
-	var errResp struct {
-		Error struct {
-			Type    string `json:"type"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if json.Unmarshal(respBody, &errResp) == nil && errResp.Error.Message != "" {
-		errMsg = fmt.Sprintf("anthropic API error (%d %s): %s", status, errResp.Error.Type, errResp.Error.Message)
+	// Response received; process streaming body.
+	// Once streaming begins, retries are no longer attempted (A-8).
+	err = p.parseSSEStream(ctx, resp.Body, ch)
+	if err != nil {
+		select {
+		case ch <- llm.StreamEvent{Type: llm.StreamError, Err: err}:
+		case <-ctx.Done():
+		}
 	} else {
-		errMsg = fmt.Sprintf("anthropic API error (%d): %s", status, strings.TrimSpace(string(respBody)))
-	}
-
-	// If Retry-After header is provided, inspect it
-	if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" && isRetryable {
-		if seconds, parseErr := strconv.Atoi(strings.TrimSpace(retryAfter)); parseErr == nil && seconds > 0 {
-			// Cap sleep at maxBackoff
-			sleepDur := min(time.Duration(seconds)*time.Second, maxBackoff)
-			select {
-			case <-ctx.Done():
-				return nil, false, ctx.Err()
-			case <-time.After(sleepDur):
-			}
+		select {
+		case ch <- llm.StreamEvent{Type: llm.StreamDone}:
+		case <-ctx.Done():
 		}
 	}
-
-	return nil, isRetryable, errors.New(errMsg)
 }
 
-func parseSSEStream(ctx context.Context, reader io.Reader, ch chan<- llm.StreamEvent) error {
+type blockState struct {
+	blockType string
+	id        string
+	name      string
+	jsonBuf   strings.Builder
+}
+
+func (p *Provider) parseSSEStream(ctx context.Context, reader io.Reader, ch chan<- llm.StreamEvent) error {
 	scanner := bufio.NewScanner(reader)
 	var currentEvent string
 	var currentUsage llm.Usage
+	blocks := make(map[int]*blockState)
 
 	for scanner.Scan() {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+
 		line := scanner.Text()
-		if line == "" {
-			currentEvent = ""
-			continue
-		}
 		if strings.HasPrefix(line, "event:") {
 			currentEvent = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 			continue
 		}
+
 		if strings.HasPrefix(line, "data:") {
 			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-			if data == "" || data == "[DONE]" {
+			if data == "" {
 				continue
 			}
-
-			if err := dispatchSSE(ctx, currentEvent, []byte(data), ch, &currentUsage); err != nil {
+			if err := p.dispatchSSE(ctx, currentEvent, []byte(data), ch, &currentUsage, blocks); err != nil {
 				return err
 			}
 		}
@@ -317,14 +325,40 @@ func parseSSEStream(ctx context.Context, reader io.Reader, ch chan<- llm.StreamE
 	return scanner.Err()
 }
 
-func dispatchSSE(ctx context.Context, eventType string, data []byte, ch chan<- llm.StreamEvent, usage *llm.Usage) error {
+func (p *Provider) dispatchSSE(ctx context.Context, eventType string, data []byte, ch chan<- llm.StreamEvent, usage *llm.Usage, blocks map[int]*blockState) error {
 	switch eventType {
+	case "content_block_start":
+		var startEv struct {
+			Index        int `json:"index"`
+			ContentBlock struct {
+				Type  string          `json:"type"`
+				ID    string          `json:"id"`
+				Name  string          `json:"name"`
+				Input json.RawMessage `json:"input"`
+			} `json:"content_block"`
+		}
+		if err := json.Unmarshal(data, &startEv); err == nil {
+			if startEv.ContentBlock.Type == "tool_use" {
+				b := &blockState{
+					blockType: "tool_use",
+					id:        startEv.ContentBlock.ID,
+					name:      startEv.ContentBlock.Name,
+				}
+				if len(startEv.ContentBlock.Input) > 0 && string(startEv.ContentBlock.Input) != "{}" {
+					b.jsonBuf.Write(startEv.ContentBlock.Input)
+				}
+				blocks[startEv.Index] = b
+			}
+		}
+
 	case "content_block_delta":
 		var deltaEv struct {
+			Index int `json:"index"`
 			Delta struct {
-				Type     string `json:"type"`
-				Text     string `json:"text,omitempty"`
-				Thinking string `json:"thinking,omitempty"`
+				Type        string `json:"type"`
+				Text        string `json:"text,omitempty"`
+				Thinking    string `json:"thinking,omitempty"`
+				PartialJSON string `json:"partial_json,omitempty"`
 			} `json:"delta"`
 		}
 		if err := json.Unmarshal(data, &deltaEv); err != nil {
@@ -342,6 +376,36 @@ func dispatchSSE(ctx context.Context, eventType string, data []byte, ch chan<- l
 			case <-ctx.Done():
 				return ctx.Err()
 			}
+		} else if deltaEv.Delta.Type == "input_json_delta" && deltaEv.Delta.PartialJSON != "" {
+			if b, ok := blocks[deltaEv.Index]; ok {
+				b.jsonBuf.WriteString(deltaEv.Delta.PartialJSON)
+			}
+		}
+
+	case "content_block_stop":
+		var stopEv struct {
+			Index int `json:"index"`
+		}
+		if err := json.Unmarshal(data, &stopEv); err == nil {
+			if b, ok := blocks[stopEv.Index]; ok && b.blockType == "tool_use" {
+				inputStr := b.jsonBuf.String()
+				if inputStr == "" {
+					inputStr = "{}"
+				}
+				select {
+				case ch <- llm.StreamEvent{
+					Type: llm.StreamToolCall,
+					ToolCall: &llm.ToolCall{
+						ID:    b.id,
+						Name:  b.name,
+						Input: []byte(inputStr),
+					},
+				}:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				delete(blocks, stopEv.Index)
+			}
 		}
 
 	case "message_start":
@@ -354,8 +418,9 @@ func dispatchSSE(ctx context.Context, eventType string, data []byte, ch chan<- l
 		}
 		if err := json.Unmarshal(data, &startEv); err == nil && startEv.Message.Usage.InputTokens > 0 {
 			usage.InputTokens = startEv.Message.Usage.InputTokens
+			usage.Cost = p.calculateCost(usage)
 			select {
-			case ch <- llm.StreamEvent{Type: llm.StreamUsage, Usage: &llm.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens}}:
+			case ch <- llm.StreamEvent{Type: llm.StreamUsage, Usage: &llm.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, Cost: usage.Cost}}:
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -369,8 +434,9 @@ func dispatchSSE(ctx context.Context, eventType string, data []byte, ch chan<- l
 		}
 		if err := json.Unmarshal(data, &deltaEv); err == nil && deltaEv.Usage.OutputTokens > 0 {
 			usage.OutputTokens = deltaEv.Usage.OutputTokens
+			usage.Cost = p.calculateCost(usage)
 			select {
-			case ch <- llm.StreamEvent{Type: llm.StreamUsage, Usage: &llm.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens}}:
+			case ch <- llm.StreamEvent{Type: llm.StreamUsage, Usage: &llm.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, Cost: usage.Cost}}:
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -389,4 +455,3 @@ func dispatchSSE(ctx context.Context, eventType string, data []byte, ch chan<- l
 	}
 	return nil
 }
-

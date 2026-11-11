@@ -92,3 +92,4 @@ func TestGrepInvalidRegex(t *testing.T) {
 		t.Errorf("expected invalid regex error, got: %+v", res)
 	}
 }
+

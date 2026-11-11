@@ -116,3 +116,4 @@ func TestTUIToolCardLifecycleAndExpandToggle(t *testing.T) {
 		t.Fatalf("expected collapsed view again: %s", viewCollapsed)
 	}
 }
+

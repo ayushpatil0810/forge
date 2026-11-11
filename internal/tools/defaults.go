@@ -9,3 +9,4 @@ func DefaultTools(workspaceRoot string) *Registry {
 		Grep{Root: workspaceRoot},
 	)
 }
+

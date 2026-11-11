@@ -61,3 +61,4 @@ func TestGlobRespectsGitignore(t *testing.T) {
 		t.Errorf("expected app.go in output, got:\n%s", res.Output)
 	}
 }
+
