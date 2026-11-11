@@ -14,31 +14,33 @@ const (
 type Mode string
 
 const (
-	ModeDefault     Mode = "default"     // reads free; writes and exec ask
-	ModeAcceptEdits Mode = "acceptEdits" // reads and writes free; exec asks
-	ModePlan        Mode = "plan"        // read-only: writes and exec denied
+	ModeDefault     Mode = "ask"          // reads free; writes and exec ask
+	ModeAcceptEdits Mode = "accept-edits" // reads and writes free; exec asks
+	ModePlan        Mode = "plan"         // read-only: writes and exec denied
+	ModeYOLO        Mode = "yolo"         // no prompts, auto-approve
 )
 
-// Policy is intentionally tiny now. Next: allow/deny rules from a policy
-// file (e.g. "bash(go test:*)"), loaded per project and per user.
-type Policy struct{ Mode Mode }
+// Policy checks tool executions against permission rules and modes (SPEC §3.3).
+type Policy struct {
+	Mode Mode
+}
 
-func (p Policy) Check(toolName string, risk tools.Risk) Verdict {
-	switch risk {
-	case tools.RiskRead:
+func (p Policy) Check(toolName string, req tools.ApprovalRequest) Verdict {
+	if !req.Required() {
 		return Allow
-	case tools.RiskWrite:
-		switch p.Mode {
-		case ModeAcceptEdits:
+	}
+	switch p.Mode {
+	case ModePlan:
+		return Deny
+	case ModeYOLO:
+		return Allow
+	case ModeAcceptEdits:
+		// If it's an edit with diff, allow without prompting; exec asks.
+		if req.Diff != "" {
 			return Allow
-		case ModePlan:
-			return Deny
 		}
 		return Ask
-	default: // exec and anything unknown: fail closed
-		if p.Mode == ModePlan {
-			return Deny
-		}
+	default:
 		return Ask
 	}
 }

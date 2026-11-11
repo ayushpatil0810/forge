@@ -1,18 +1,18 @@
 package agent
 
-import "github.com/ayushpatil0810/forge/internal/llm"
-
 type EventType string
 
 const (
-	EventTextDelta         EventType = "text_delta"
-	EventToolStarted       EventType = "tool_started"
-	EventApprovalRequested EventType = "approval_requested"
-	EventToolFinished      EventType = "tool_finished"
-	EventUsage             EventType = "usage"
-	EventDone              EventType = "done"      // terminal
-	EventError             EventType = "error"     // terminal
-	EventCancelled         EventType = "cancelled" // terminal
+	EventTokenDelta        EventType = "TokenDelta"
+	EventThinkingDelta     EventType = "ThinkingDelta"
+	EventToolStarted       EventType = "ToolStarted"
+	EventToolOutputDelta   EventType = "ToolOutputDelta"
+	EventToolFinished      EventType = "ToolFinished"
+	EventApprovalRequested EventType = "ApprovalRequested"
+	EventCheckpointCreated EventType = "CheckpointCreated"
+	EventUsageUpdated      EventType = "UsageUpdated"
+	EventError             EventType = "Error"
+	EventDone              EventType = "Done"
 )
 
 type ToolStatus string
@@ -25,36 +25,82 @@ const (
 	ToolCancelled ToolStatus = "cancelled"
 )
 
-// ToolEvent describes a tool call's lifecycle. Strings only, so Wails
-// generates clean TypeScript types for the React frontend.
-type ToolEvent struct {
+// Typed payloads for events defined in SPEC §6.4.
+// All fields are JSON-serializable so Wails can generate clean TypeScript types.
+
+type TokenDeltaPayload struct {
+	Text string `json:"text"`
+}
+
+type ThinkingDeltaPayload struct {
+	Thinking string `json:"thinking"`
+}
+
+type ToolStartedPayload struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Input string `json:"input"`
+}
+
+type ToolOutputDeltaPayload struct {
+	ID    string `json:"id"`
+	Chunk string `json:"chunk"`
+}
+
+type ToolFinishedPayload struct {
 	ID         string     `json:"id"`
 	Name       string     `json:"name"`
-	Input      string     `json:"input"`
-	Risk       string     `json:"risk"`
+	Result     string     `json:"result"`
+	DurationMs int64      `json:"durationMs"`
+	Error      string     `json:"error,omitempty"`
 	Status     ToolStatus `json:"status"`
-	Output     string     `json:"output,omitempty"`
-	DurationMs int64      `json:"durationMs,omitempty"`
 }
 
-type ApprovalRequest struct {
-	ID   string    `json:"id"` // equals the tool call ID
-	Tool ToolEvent `json:"tool"`
-	// Diff string — populated once write/edit tools exist.
+type ApprovalRequestedPayload struct {
+	ID          string `json:"id"` // equals the tool call ID
+	Tool        string `json:"tool"`
+	Input       string `json:"input"`
+	Description string `json:"description,omitempty"`
+	Diff        string `json:"diff,omitempty"`
 }
 
-// Event is the single, flat, JSON-friendly envelope both UIs consume.
-// Switch on Type and read the matching field.
+type CheckpointCreatedPayload struct {
+	ID    string   `json:"id"`
+	Files []string `json:"files"`
+}
+
+type UsageUpdatedPayload struct {
+	InputTokens  int     `json:"inputTokens"`
+	OutputTokens int     `json:"outputTokens"`
+	Cost         float64 `json:"cost"`
+}
+
+type ErrorPayload struct {
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	Retryable bool   `json:"retryable"`
+}
+
+type DonePayload struct {
+	Reason string `json:"reason"`
+}
+
+// Event is the single, flat, JSON-friendly envelope frontends consume (SPEC §6.4).
 type Event struct {
-	Seq      int64            `json:"seq"`
-	Type     EventType        `json:"type"`
-	Text     string           `json:"text,omitempty"`
-	Tool     *ToolEvent       `json:"tool,omitempty"`
-	Approval *ApprovalRequest `json:"approval,omitempty"`
-	Usage    *llm.Usage       `json:"usage,omitempty"`
-	Error    string           `json:"error,omitempty"`
+	Seq       int64                     `json:"seq"`
+	Type      EventType                 `json:"type"`
+	Token     *TokenDeltaPayload        `json:"token,omitempty"`
+	Thinking  *ThinkingDeltaPayload     `json:"thinking,omitempty"`
+	ToolStart *ToolStartedPayload       `json:"toolStart,omitempty"`
+	ToolOut   *ToolOutputDeltaPayload   `json:"toolOut,omitempty"`
+	ToolDone  *ToolFinishedPayload      `json:"toolDone,omitempty"`
+	Approval  *ApprovalRequestedPayload `json:"approval,omitempty"`
+	Checkpt   *CheckpointCreatedPayload `json:"checkpt,omitempty"`
+	Usage     *UsageUpdatedPayload      `json:"usage,omitempty"`
+	Err       *ErrorPayload             `json:"err,omitempty"`
+	Done      *DonePayload              `json:"done,omitempty"`
 }
 
 func (e Event) Terminal() bool {
-	return e.Type == EventDone || e.Type == EventError || e.Type == EventCancelled
+	return e.Type == EventDone || e.Type == EventError
 }

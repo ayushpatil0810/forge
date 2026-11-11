@@ -38,8 +38,9 @@ type ToolSpec struct {
 }
 
 type Usage struct {
-	InputTokens  int `json:"inputTokens"`
-	OutputTokens int `json:"outputTokens"`
+	InputTokens  int     `json:"inputTokens"`
+	OutputTokens int     `json:"outputTokens"`
+	Cost         float64 `json:"cost,omitempty"`
 }
 
 type Request struct {
@@ -52,8 +53,9 @@ type Request struct {
 type StreamEventType int
 
 const (
-	StreamText     StreamEventType = iota // incremental text
-	StreamToolCall                        // a COMPLETE tool call (adapters assemble partial JSON)
+	StreamText StreamEventType = iota // incremental text
+	StreamThinking                    // reasoning chunk
+	StreamToolCall                    // a COMPLETE tool call (adapters assemble partial JSON)
 	StreamUsage
 	StreamDone
 	StreamError
@@ -67,12 +69,22 @@ type StreamEvent struct {
 	Err      error
 }
 
-// Provider streams one model turn.
+// ModelInfo describes a model supported by a provider (SPEC §6.3).
+type ModelInfo struct {
+	ID            string  `json:"id"`
+	Name          string  `json:"name"`
+	ContextWindow int     `json:"contextWindow"`
+	InputPrice    float64 `json:"inputPrice,omitempty"`  // price per million tokens
+	OutputPrice   float64 `json:"outputPrice,omitempty"` // price per million tokens
+}
+
+// Provider streams one model turn (SPEC §6.3).
 //
 // Contract: the returned channel MUST be closed when the turn ends, and the
 // producer MUST stop (and close) when ctx is cancelled. Adapters send
 // StreamDone on success or StreamError on failure before closing.
 type Provider interface {
 	Name() string
+	Models() []ModelInfo
 	Stream(ctx context.Context, req Request) (<-chan StreamEvent, error)
 }

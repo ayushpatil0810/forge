@@ -15,14 +15,18 @@ import (
 )
 
 const (
-	defaultMaxTurns = 40
-	maxToolOutput   = 30_000 // bytes returned to the model per tool call
+	defaultMaxTurns         = 40
+	defaultMaxRepeatedCalls = 3
+	maxToolOutput           = 30_000 // bytes returned to the model per tool call
 )
 
 // NewLocal returns an in-process Session.
 func NewLocal(cfg Config) Session {
 	if cfg.MaxTurns <= 0 {
 		cfg.MaxTurns = defaultMaxTurns
+	}
+	if cfg.MaxRepeatedCalls <= 0 {
+		cfg.MaxRepeatedCalls = defaultMaxRepeatedCalls
 	}
 	if cfg.Tools == nil {
 		cfg.Tools = tools.NewRegistry()
@@ -49,6 +53,7 @@ type local struct {
 	cancel    context.CancelFunc
 	pending   map[string]chan Decision
 	always    map[string]bool
+	usage     UsageUpdatedPayload
 	closeOnce sync.Once
 
 	history []llm.Message // only touched by the single running turn
@@ -56,7 +61,7 @@ type local struct {
 
 func (s *local) Events() <-chan Event { return s.events }
 
-func (s *local) Send(prompt string) error {
+func (s *local) Send(ctx context.Context, prompt string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.isClosed {
@@ -65,10 +70,13 @@ func (s *local) Send(prompt string) error {
 	if s.running {
 		return ErrBusy
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	turnCtx, cancel := context.WithCancel(ctx)
 	s.running, s.cancel = true, cancel
 	s.wg.Add(1)
-	go s.runTurn(ctx, cancel, prompt)
+	go s.runTurn(turnCtx, cancel, prompt)
 	return nil
 }
 
@@ -80,6 +88,12 @@ func (s *local) Cancel() {
 	}
 }
 
+func (s *local) Usage() Usage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.usage
+}
+
 func (s *local) Close() {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
@@ -88,7 +102,7 @@ func (s *local) Close() {
 			s.cancel()
 		}
 		s.mu.Unlock()
-		close(s.closed) // unblocks any emit stuck on a stalled consumer
+		close(s.closed) // unblocks any emit or await stuck on a stalled consumer
 		s.wg.Wait()
 		close(s.events)
 	})
@@ -119,40 +133,76 @@ func (s *local) runTurn(ctx context.Context, cancel context.CancelFunc, prompt s
 	defer s.wg.Done()
 	final := s.loop(ctx, prompt)
 	cancel()
-	// Mark idle BEFORE the terminal event so a UI can Send as soon as it sees it.
+	// Mark idle BEFORE the terminal event so a frontend can Send as soon as it sees it.
 	s.mu.Lock()
 	s.running, s.cancel = false, nil
 	s.mu.Unlock()
 	s.emit(final)
 }
 
-// loop is the agent loop: model -> tools -> model ... until no tool calls.
+// loop is the agent loop: model -> tools -> model ... until no tool calls or stopped.
 func (s *local) loop(ctx context.Context, prompt string) Event {
 	s.history = append(s.history, llm.Message{Role: llm.RoleUser, Text: prompt})
+
+	var lastToolCallsSig string
+	var consecutiveRepeats int
 
 	for turn := 0; turn < s.cfg.MaxTurns; turn++ {
 		msg, err := s.streamModel(ctx)
 		if ctx.Err() != nil {
-			return Event{Type: EventCancelled}
+			return Event{Type: EventDone, Done: &DonePayload{Reason: "cancelled"}}
 		}
 		if err != nil {
-			return Event{Type: EventError, Error: err.Error()}
+			return Event{Type: EventError, Err: &ErrorPayload{Code: "provider_error", Message: err.Error(), Retryable: true}}
 		}
 		s.history = append(s.history, msg)
 		if len(msg.ToolCalls) == 0 {
-			return Event{Type: EventDone}
+			return Event{Type: EventDone, Done: &DonePayload{Reason: "completed"}}
 		}
+
+		// Loop guard A-5: detect repeated identical calls.
+		var sig strings.Builder
+		for _, tc := range msg.ToolCalls {
+			sig.WriteString(tc.Name)
+			sig.WriteString(":")
+			sig.Write(tc.Input)
+			sig.WriteString(";")
+		}
+		currentSig := sig.String()
+		if currentSig == lastToolCallsSig {
+			consecutiveRepeats++
+			if consecutiveRepeats >= s.cfg.MaxRepeatedCalls {
+				return Event{
+					Type: EventError,
+					Err: &ErrorPayload{
+						Code:      "runaway_loop",
+						Message:   fmt.Sprintf("detected runaway loop: %d consecutive identical calls (%s)", consecutiveRepeats, currentSig),
+						Retryable: false,
+					},
+				}
+			}
+		} else {
+			lastToolCallsSig = currentSig
+			consecutiveRepeats = 1
+		}
+
 		// Always append one result per call, even when cancelled, or the
 		// history becomes invalid for the next request.
 		for _, call := range msg.ToolCalls {
 			s.history = append(s.history, s.runToolCall(ctx, call))
 		}
 		if ctx.Err() != nil {
-			return Event{Type: EventCancelled}
+			return Event{Type: EventDone, Done: &DonePayload{Reason: "cancelled"}}
 		}
-		// TODO: context compaction goes here.
 	}
-	return Event{Type: EventError, Error: fmt.Sprintf("stopped after %d model calls (MaxTurns)", s.cfg.MaxTurns)}
+	return Event{
+		Type: EventError,
+		Err: &ErrorPayload{
+			Code:      "max_turns",
+			Message:   fmt.Sprintf("stopped after %d model calls (MaxTurns)", s.cfg.MaxTurns),
+			Retryable: false,
+		},
+	}
 }
 
 func (s *local) streamModel(ctx context.Context) (llm.Message, error) {
@@ -171,11 +221,23 @@ func (s *local) streamModel(ctx context.Context) (llm.Message, error) {
 		switch ev.Type {
 		case llm.StreamText:
 			text.WriteString(ev.Text)
-			s.emit(Event{Type: EventTextDelta, Text: ev.Text})
+			s.emit(Event{Type: EventTokenDelta, Token: &TokenDeltaPayload{Text: ev.Text}})
+		case llm.StreamThinking:
+			s.emit(Event{Type: EventThinkingDelta, Thinking: &ThinkingDeltaPayload{Thinking: ev.Text}})
 		case llm.StreamToolCall:
-			msg.ToolCalls = append(msg.ToolCalls, *ev.ToolCall)
+			if ev.ToolCall != nil {
+				msg.ToolCalls = append(msg.ToolCalls, *ev.ToolCall)
+			}
 		case llm.StreamUsage:
-			s.emit(Event{Type: EventUsage, Usage: ev.Usage})
+			if ev.Usage != nil {
+				s.mu.Lock()
+				s.usage.InputTokens += ev.Usage.InputTokens
+				s.usage.OutputTokens += ev.Usage.OutputTokens
+				s.usage.Cost += ev.Usage.Cost
+				currentUsage := s.usage
+				s.mu.Unlock()
+				s.emit(Event{Type: EventUsageUpdated, Usage: &currentUsage})
+			}
 		case llm.StreamError:
 			return msg, ev.Err
 		}
@@ -185,43 +247,44 @@ func (s *local) streamModel(ctx context.Context) (llm.Message, error) {
 }
 
 func (s *local) runToolCall(ctx context.Context, c llm.ToolCall) llm.Message {
-	te := ToolEvent{ID: c.ID, Name: c.Name, Input: string(c.Input), Status: ToolPending}
-	result := func(status ToolStatus, out string, start time.Time) llm.Message {
-		te.Status, te.Output = status, out
+	te := ToolFinishedPayload{ID: c.ID, Name: c.Name, Status: ToolPending}
+	result := func(status ToolStatus, out string, errMsg string, start time.Time) llm.Message {
+		te.Status, te.Result, te.Error = status, out, errMsg
 		if !start.IsZero() {
 			te.DurationMs = time.Since(start).Milliseconds()
 		}
-		s.emit(Event{Type: EventToolFinished, Tool: &te})
+		s.emit(Event{Type: EventToolFinished, ToolDone: &te})
 		return llm.Message{Role: llm.RoleTool, ToolCallID: c.ID, Text: out, IsError: status != ToolOK}
 	}
 
 	t, ok := s.cfg.Tools.Get(c.Name)
 	if !ok {
-		s.emit(Event{Type: EventToolStarted, Tool: &te})
-		return result(ToolError, fmt.Sprintf("unknown tool %q", c.Name), time.Time{})
+		s.emit(Event{Type: EventToolStarted, ToolStart: &ToolStartedPayload{ID: c.ID, Name: c.Name, Input: string(c.Input)}})
+		return result(ToolError, fmt.Sprintf("unknown tool %q", c.Name), fmt.Sprintf("unknown tool %q", c.Name), time.Time{})
 	}
-	risk := t.Risk(c.Input)
-	te.Risk = string(risk)
-	s.emit(Event{Type: EventToolStarted, Tool: &te})
+
+	s.emit(Event{Type: EventToolStarted, ToolStart: &ToolStartedPayload{ID: c.ID, Name: c.Name, Input: string(c.Input)}})
 
 	if ctx.Err() != nil {
-		return result(ToolCancelled, "cancelled by user", time.Time{})
+		return result(ToolCancelled, "cancelled by user", "cancelled by user", time.Time{})
 	}
 
-	verdict := s.cfg.Policy.Check(c.Name, risk)
+	appReq := t.NeedsApproval(c.Input)
+	verdict := s.cfg.Policy.Check(c.Name, appReq)
 	if verdict == permission.Ask && s.isAlwaysAllowed(c.Name) {
 		verdict = permission.Allow
 	}
+
 	switch verdict {
 	case permission.Deny:
-		return result(ToolDenied, "denied by permission policy", time.Time{})
+		return result(ToolDenied, "denied by permission policy", "denied by permission policy", time.Time{})
 	case permission.Ask:
-		d, err := s.awaitApproval(ctx, te)
+		d, err := s.awaitApproval(ctx, c.ID, c.Name, string(c.Input), appReq)
 		if err != nil {
-			return result(ToolCancelled, "cancelled by user", time.Time{})
+			return result(ToolCancelled, "cancelled by user", "cancelled by user", time.Time{})
 		}
 		if d == DecisionDeny {
-			return result(ToolDenied, "the user denied this action", time.Time{})
+			return result(ToolDenied, "the user denied this action", "the user denied this action", time.Time{})
 		}
 		if d == DecisionAllowAlways {
 			s.mu.Lock()
@@ -233,16 +296,16 @@ func (s *local) runToolCall(ctx context.Context, c llm.ToolCall) llm.Message {
 	start := time.Now()
 	res, err := t.Run(ctx, json.RawMessage(c.Input))
 	if ctx.Err() != nil {
-		return result(ToolCancelled, "cancelled by user", start)
+		return result(ToolCancelled, "cancelled by user", "cancelled by user", start)
 	}
 	if err != nil {
-		return result(ToolError, err.Error(), start)
+		return result(ToolError, err.Error(), err.Error(), start)
 	}
 	out := truncate(res.Output, maxToolOutput)
 	if res.IsError {
-		return result(ToolError, out, start)
+		return result(ToolError, out, out, start)
 	}
-	return result(ToolOK, out, start)
+	return result(ToolOK, out, "", start)
 }
 
 func (s *local) isAlwaysAllowed(name string) bool {
@@ -251,22 +314,33 @@ func (s *local) isAlwaysAllowed(name string) bool {
 	return s.always[name]
 }
 
-func (s *local) awaitApproval(ctx context.Context, te ToolEvent) (Decision, error) {
+func (s *local) awaitApproval(ctx context.Context, id, name, input string, req tools.ApprovalRequest) (Decision, error) {
 	ch := make(chan Decision, 1)
 	s.mu.Lock()
-	s.pending[te.ID] = ch
+	s.pending[id] = ch
 	s.mu.Unlock()
 
-	s.emit(Event{Type: EventApprovalRequested, Approval: &ApprovalRequest{ID: te.ID, Tool: te}})
+	s.emit(Event{
+		Type: EventApprovalRequested,
+		Approval: &ApprovalRequestedPayload{
+			ID:          id,
+			Tool:        name,
+			Input:       input,
+			Description: req.Description,
+			Diff:        req.Diff,
+		},
+	})
 
 	select {
 	case d := <-ch:
 		return d, nil
 	case <-ctx.Done():
 		s.mu.Lock()
-		delete(s.pending, te.ID)
+		delete(s.pending, id)
 		s.mu.Unlock()
 		return DecisionDeny, ctx.Err()
+	case <-s.closed:
+		return DecisionDeny, ErrClosed
 	}
 }
 

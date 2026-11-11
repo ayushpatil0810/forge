@@ -13,11 +13,25 @@ import (
 // Turn is the scripted response for one model call.
 type Turn []llm.StreamEvent
 
-func Text(s string) llm.StreamEvent { return llm.StreamEvent{Type: llm.StreamText, Text: s} }
+func Text(s string) llm.StreamEvent {
+	return llm.StreamEvent{Type: llm.StreamText, Text: s}
+}
+
+func Thinking(s string) llm.StreamEvent {
+	return llm.StreamEvent{Type: llm.StreamThinking, Text: s}
+}
 
 func ToolUse(id, name string, input any) llm.StreamEvent {
 	b, _ := json.Marshal(input)
 	return llm.StreamEvent{Type: llm.StreamToolCall, ToolCall: &llm.ToolCall{ID: id, Name: name, Input: b}}
+}
+
+func Usage(inputTokens, outputTokens int) llm.StreamEvent {
+	return llm.StreamEvent{Type: llm.StreamUsage, Usage: &llm.Usage{InputTokens: inputTokens, OutputTokens: outputTokens}}
+}
+
+func Error(err error) llm.StreamEvent {
+	return llm.StreamEvent{Type: llm.StreamError, Err: err}
 }
 
 type Provider struct {
@@ -27,9 +41,23 @@ type Provider struct {
 	Requests []llm.Request // every request received, for assertions
 }
 
-func New(turns ...Turn) *Provider { return &Provider{turns: turns} }
+func New(turns ...Turn) *Provider {
+	return &Provider{turns: turns}
+}
 
-func (p *Provider) Name() string { return "mock" }
+func (p *Provider) Name() string {
+	return "mock"
+}
+
+func (p *Provider) Models() []llm.ModelInfo {
+	return []llm.ModelInfo{
+		{
+			ID:            "mock-model",
+			Name:          "Mock Replay Model",
+			ContextWindow: 128000,
+		},
+	}
+}
 
 func (p *Provider) Stream(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, error) {
 	p.mu.Lock()

@@ -67,23 +67,25 @@ func runForge(ctx context.Context, prompt string) error {
 	})
 	defer s.Close()
 
-	if err := s.Send(prompt); err != nil {
+	if err := s.Send(ctx, prompt); err != nil {
 		return err
 	}
 
 	stdin := bufio.NewReader(os.Stdin)
 	for ev := range s.Events() {
 		switch ev.Type {
-		case agent.EventTextDelta:
-			fmt.Print(ev.Text)
+		case agent.EventTokenDelta:
+			if ev.Token != nil {
+				fmt.Print(ev.Token.Text)
+			}
 		case agent.EventToolStarted:
-			if ev.Tool != nil {
-				fmt.Printf("\n● %s %s\n", ev.Tool.Name, ev.Tool.Input)
+			if ev.ToolStart != nil {
+				fmt.Printf("\n● %s %s\n", ev.ToolStart.Name, ev.ToolStart.Input)
 			}
 		case agent.EventApprovalRequested:
 			d := agent.DecisionAllow
 			if !yesFlag && ev.Approval != nil {
-				fmt.Printf("  allow %s? [y/N] ", ev.Approval.Tool.Name)
+				fmt.Printf("  allow %s? [y/N] ", ev.Approval.Tool)
 				line, _ := stdin.ReadString('\n')
 				if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "y") {
 					d = agent.DecisionDeny
@@ -93,12 +95,15 @@ func runForge(ctx context.Context, prompt string) error {
 				_ = s.Respond(ev.Approval.ID, d)
 			}
 		case agent.EventToolFinished:
-			if ev.Tool != nil {
-				fmt.Printf("  ↳ %s (%dms)\n", ev.Tool.Status, ev.Tool.DurationMs)
+			if ev.ToolDone != nil {
+				fmt.Printf("  ↳ %s (%dms)\n", ev.ToolDone.Status, ev.ToolDone.DurationMs)
 			}
 		case agent.EventError:
-			return fmt.Errorf("error: %s", ev.Error)
-		case agent.EventDone, agent.EventCancelled:
+			if ev.Err != nil {
+				return fmt.Errorf("error [%s]: %s", ev.Err.Code, ev.Err.Message)
+			}
+			return fmt.Errorf("unknown error")
+		case agent.EventDone:
 			return nil
 		}
 	}

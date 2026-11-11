@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
-
-	"github.com/ayushpatil0810/forge/internal/llm"
 )
 
-type ReadFile struct{ Root string }
+type ReadFile struct {
+	Root string
+}
 
 const readFileSchema = `{
   "type": "object",
@@ -22,15 +22,21 @@ const readFileSchema = `{
   "required": ["path"]
 }`
 
-func (ReadFile) Spec() llm.ToolSpec {
-	return llm.ToolSpec{
-		Name:        "read_file",
-		Description: "Read a text file from the workspace. Returns numbered lines.",
-		Schema:      json.RawMessage(readFileSchema),
-	}
+func (ReadFile) Name() string {
+	return "read_file"
 }
 
-func (ReadFile) Risk(json.RawMessage) Risk { return RiskRead }
+func (ReadFile) Description() string {
+	return "Read a text file from the workspace. Returns numbered lines."
+}
+
+func (ReadFile) Schema() json.RawMessage {
+	return json.RawMessage(readFileSchema)
+}
+
+func (ReadFile) NeedsApproval(json.RawMessage) ApprovalRequest {
+	return ApprovalRequest{}
+}
 
 func (r ReadFile) Run(_ context.Context, input json.RawMessage) (Result, error) {
 	var args struct {
