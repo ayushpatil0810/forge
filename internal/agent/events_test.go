@@ -107,3 +107,4 @@ func TestEventJSONSerialization(t *testing.T) {
 		}
 	}
 }
+

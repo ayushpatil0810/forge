@@ -60,3 +60,4 @@ func TestPermissionPolicy(t *testing.T) {
 		t.Fatal("expected bash allowed in yolo mode")
 	}
 }
+

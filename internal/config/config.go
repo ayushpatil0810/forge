@@ -186,3 +186,4 @@ func applyOptions(dst *Config, opts LoadOptions) {
 		dst.SystemPrompt = opts.SystemPrompt
 	}
 }
+
