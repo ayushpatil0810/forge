@@ -28,7 +28,7 @@
 
 ## 1. Current focus
 
-> Slice 2: Chat with a real model in the terminal.
+> Slice 3: Read-only tools (agent can explore a repo).
 
 ---
 
@@ -64,18 +64,18 @@ _Goal: the interfaces both frontends will rely on, testable with no network._
 
 **Exit check:** a scripted transcript with two tool calls runs to `Done` in a test; cancellation test passes under `-race`.
 
-### Slice 2: Chat with a real model in the terminal `TODO`
+### Slice 2: Chat with a real model in the terminal `DONE`
 
 _Goal: first demoable thing. Streaming chat, no tools yet._
 
-- [ ] Anthropic provider with streaming `L-1` `L-2`
-- [ ] Retry with exponential backoff on transient errors `A-8`
-- [ ] API key from env var (keychain comes later)
-- [ ] Bubble Tea app: viewport, multiline input, send/receive `T-4`
-- [ ] Streaming markdown via Glamour, syntax highlighting via Chroma `T-1`
-- [ ] Spinner with activity label `T-10`
-- [ ] Resize handling, mouse scroll, bracketed paste `T-9`
-- [ ] `Esc` interrupts the running response `A-4`
+- [x] Anthropic provider with streaming `L-1` `L-2`
+- [x] Retry with exponential backoff on transient errors `A-8`
+- [x] API key from env var (keychain comes later)
+- [x] Bubble Tea app: viewport, multiline input, send/receive `T-4`
+- [x] Streaming markdown via Glamour, syntax highlighting via Chroma `T-1`
+- [x] Spinner with activity label `T-10`
+- [x] Resize handling, mouse scroll, bracketed paste `T-9`
+- [x] `Esc` interrupts the running response `A-4`
 
 **Exit check:** `forge` opens, streams a multi-paragraph answer with a highlighted code block, and `Esc` stops it cleanly.
 
@@ -156,6 +156,7 @@ Newest first. Format: `YYYY-MM-DD · Slice N · what was done · evidence (commi
 
 | Date       | Slice | What                                                                                                                      | Evidence                                              |
 | ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| 2026-11-12 | 2     | Anthropic streaming provider (raw HTTP+SSE, retry with backoff/jitter, models catalog), Bubble Tea TUI (viewport, textarea, spinner, Glamour/Chroma markdown), CLI wiring | Unit/TUI/race tests pass, commit d0cd438             |
 | 2026-11-12 | 1     | Core contracts (`Session`, `Provider`, `Tool`, typed `Event` payloads), mock replay provider, agent loop with cancellation, loop guards (max turns and repeated calls), full unit/loop tests | `TestScriptedTranscriptWithTwoToolCallsRunsToDone` and `TestCancellationWithContext` pass; commit 3293d66 |
 | 2026-11-12 | 0     | Skeleton, Cobra CLI (`--version`), CI workflow (Linux/macOS/Windows), Makefile, layered config loader (defaults/user/project/env/flags) | `go build ./... && go test ./...` pass; commit 1d25f9a |
 
@@ -183,17 +184,20 @@ _Severity: `blocker` (stops a slice) · `major` · `minor` · `cosmetic`_
 
 Record anything that deviates from, resolves, or adds to `SPEC.md`. Newest first.
 
-| Date       | Decision                                                  | Reason                                                        | Spec impact        |
-| ---------- | --------------------------------------------------------- | ------------------------------------------------------------- | ------------------ |
-| 2026-11-12 | Aligned `Tool` interface with SPEC §6.3                   | Exact contract: `Name()`, `Description()`, `Schema()`, `Run()`, `NeedsApproval()` | `internal/tools` |
-| 2026-11-12 | Added repeated identical call detection in loop guard      | Breaks runaway loops when consecutive calls are identical (A-5) | `internal/agent` |
-| 2026-11-12 | Use `github.com/spf13/cobra` v1.10.2                      | SPEC §11, actively maintained standard Go CLI                 | CLI entrypoint     |
-| 2026-11-12 | Standard library for layered config loader                | Self-contained, zero-dependency, satisfies S-6                | `internal/config`  |
-| _pending_  | Project name (placeholder: `forge`)                       | SPEC §14 Q1                                                   | Rename across repo |
-| _pending_  | License                                                   | SPEC §14 Q2                                                   | None               |
-| _pending_  | Wails v2 vs v3                                            | SPEC §14 Q3; decide before desktop spike                      | Desktop phase      |
-| _pending_  | Windows shell strategy                                    | SPEC §14 Q4; needed by Slice 5                                | `bash` tool        |
-| _pending_  | First provider = Anthropic                                | SPEC §14 Q7                                                   | None (matches spec)|
+| Date       | Decision                                                                 | Reason                                                                             | Spec impact        |
+| ---------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- | ------------------ |
+| 2026-11-12 | Raw HTTP + SSE for Anthropic provider                                    | SPEC §11, zero SDK dependencies, complete control over retries, backoff, and events | `internal/llm/anthropic` |
+| 2026-11-12 | Bubble Tea v1 ecosystem (`bubbletea v1.3.4`, `bubbles v0.20.0`, `lipgloss v1.0.0`, `glamour v0.8.0`) | Stable production releases across the Charm ecosystem, full cross-compatibility   | `internal/tui`     |
+| 2026-11-12 | Throttled markdown rendering (40ms) with unclosed code fence recovery    | Prevents rendering flicker and layout breaks during token streaming (T-1)          | `internal/tui`     |
+| 2026-11-12 | Aligned `Tool` interface with SPEC §6.3                                  | Exact contract: `Name()`, `Description()`, `Schema()`, `Run()`, `NeedsApproval()`  | `internal/tools`   |
+| 2026-11-12 | Added repeated identical call detection in loop guard                     | Breaks runaway loops when consecutive calls are identical (A-5)                    | `internal/agent`   |
+| 2026-11-12 | Use `github.com/spf13/cobra` v1.10.2                                     | SPEC §11, actively maintained standard Go CLI                                      | CLI entrypoint     |
+| 2026-11-12 | Standard library for layered config loader                               | Self-contained, zero-dependency, satisfies S-6                                     | `internal/config`  |
+| _pending_  | Project name (placeholder: `forge`)                                      | SPEC §14 Q1                                                                        | Rename across repo |
+| _pending_  | License                                                                  | SPEC §14 Q2                                                                        | None               |
+| _pending_  | Wails v2 vs v3                                                           | SPEC §14 Q3; decide before desktop spike                                           | Desktop phase      |
+| _pending_  | Windows shell strategy                                                   | SPEC §14 Q4; needed by Slice 5                                                     | `bash` tool        |
+| _pending_  | First provider = Anthropic                                               | SPEC §14 Q7                                                                        | None (matches spec)|
 
 _Convert a `_pending_` row to a dated row when decided. If a decision changes a requirement, also update `SPEC.md`._
 
@@ -201,6 +205,6 @@ _Convert a `_pending_` row to a dated row when decided. If a decision changes a 
 
 ## 6. Next 3 actions
 
-1. Slice 2: implement Anthropic streaming provider adapter (`internal/llm/anthropic`) with exponential backoff on transient errors (`L-1`, `L-2`, `A-8`).
-2. Slice 2: build Bubble Tea TUI shell (`internal/tui`) with viewport, multiline input, and send/receive (`T-4`).
-3. Slice 2: render streaming markdown with Glamour, syntax highlighting with Chroma (`T-1`), and hook up `Esc` cancellation (`A-4`).
+1. Slice 3: implement Tool registry and JSON-schema declaration for read-only tools (`read_file`, `list_dir`, `glob`, `grep`).
+2. Slice 3: implement workspace path confinement (`SEC-8`) and output truncation with "more available" marker.
+3. Slice 3: build collapsible tool-call cards in the TUI (`T-2`) and load `AGENTS.md` into the system prompt (`S-5`).
