@@ -198,13 +198,24 @@ func (p *Provider) Stream(ctx context.Context, req llm.Request) (<-chan llm.Stre
 
 	for _, m := range req.Messages {
 		if m.Role == llm.RoleTool {
+			toolName := m.ToolCallID
+			if strings.HasPrefix(toolName, "call_gemini_") {
+				subparts := strings.Split(toolName, "_")
+				if len(subparts) >= 3 {
+					toolName = subparts[2]
+				}
+			}
+			respMap := map[string]any{"output": m.Text}
+			if m.IsError {
+				respMap = map[string]any{"error": m.Text}
+			}
 			bodyObj.Contents = append(bodyObj.Contents, geminiContent{
 				Role: "function",
 				Parts: []geminiPart{
 					{
 						FunctionResponse: &geminiFunctionResp{
-							Name:     m.ToolCallID,
-							Response: map[string]any{"output": m.Text},
+							Name:     toolName,
+							Response: map[string]any{"response": respMap},
 						},
 					},
 				},

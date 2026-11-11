@@ -134,6 +134,20 @@ func (p *Provider) Models() []llm.ModelInfo {
 	return catalog
 }
 
+func isReasoningModel(model string) bool {
+	m := strings.ToLower(model)
+	return strings.HasPrefix(m, "o1") || strings.HasPrefix(m, "o3") || strings.Contains(m, "astra")
+}
+
+type openAIToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
 type openAIFunction struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
@@ -146,9 +160,10 @@ type openAITool struct {
 }
 
 type openAIMessage struct {
-	Role       string `json:"role"`
-	Content    string `json:"content,omitempty"`
-	ToolCallID string `json:"tool_call_id,omitempty"`
+	Role       string           `json:"role"`
+	Content    *string          `json:"content"`
+	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
 }
 
 type openAIStreamOptions struct {
@@ -156,12 +171,13 @@ type openAIStreamOptions struct {
 }
 
 type openAIRequest struct {
-	Model         string              `json:"model"`
-	Messages      []openAIMessage     `json:"messages"`
-	Tools         []openAITool        `json:"tools,omitempty"`
-	Stream        bool                `json:"stream"`
-	StreamOptions openAIStreamOptions `json:"stream_options"`
-	MaxTokens     int                 `json:"max_tokens,omitempty"`
+	Model               string              `json:"model"`
+	Messages            []openAIMessage     `json:"messages"`
+	Tools               []openAITool        `json:"tools,omitempty"`
+	Stream              bool                `json:"stream"`
+	StreamOptions       openAIStreamOptions `json:"stream_options"`
+	MaxTokens           int                 `json:"max_tokens,omitempty"`
+	MaxCompletionTokens int                 `json:"max_completion_tokens,omitempty"`
 }
 
 func (p *Provider) calculateCost(usage *llm.Usage) float64 {
@@ -182,27 +198,62 @@ func (p *Provider) Stream(ctx context.Context, req llm.Request) (<-chan llm.Stre
 		Model:         p.model,
 		Stream:        true,
 		StreamOptions: openAIStreamOptions{IncludeUsage: true},
-		MaxTokens:     req.MaxTokens,
+	}
+
+	if isReasoningModel(p.model) {
+		bodyObj.MaxCompletionTokens = req.MaxTokens
+	} else {
+		bodyObj.MaxTokens = req.MaxTokens
 	}
 
 	if req.System != "" {
+		systemRole := "system"
+		if isReasoningModel(p.model) {
+			systemRole = "developer"
+		}
+		sysText := req.System
 		bodyObj.Messages = append(bodyObj.Messages, openAIMessage{
-			Role:    "system",
-			Content: req.System,
+			Role:    systemRole,
+			Content: &sysText,
 		})
 	}
 
 	for _, m := range req.Messages {
-		role := string(m.Role)
-		toolCallID := m.ToolCallID
-		if m.Role == llm.RoleTool {
-			role = "tool"
+		switch m.Role {
+		case llm.RoleUser:
+			text := m.Text
+			bodyObj.Messages = append(bodyObj.Messages, openAIMessage{
+				Role:    "user",
+				Content: &text,
+			})
+		case llm.RoleAssistant:
+			var contentPtr *string
+			if m.Text != "" {
+				text := m.Text
+				contentPtr = &text
+			}
+			var tcList []openAIToolCall
+			for _, tc := range m.ToolCalls {
+				var item openAIToolCall
+				item.ID = tc.ID
+				item.Type = "function"
+				item.Function.Name = tc.Name
+				item.Function.Arguments = string(tc.Input)
+				tcList = append(tcList, item)
+			}
+			bodyObj.Messages = append(bodyObj.Messages, openAIMessage{
+				Role:      "assistant",
+				Content:   contentPtr,
+				ToolCalls: tcList,
+			})
+		case llm.RoleTool:
+			text := m.Text
+			bodyObj.Messages = append(bodyObj.Messages, openAIMessage{
+				Role:       "tool",
+				Content:    &text,
+				ToolCallID: m.ToolCallID,
+			})
 		}
-		bodyObj.Messages = append(bodyObj.Messages, openAIMessage{
-			Role:       role,
-			Content:    m.Text,
-			ToolCallID: toolCallID,
-		})
 	}
 
 	for _, t := range req.Tools {
