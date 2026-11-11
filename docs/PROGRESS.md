@@ -165,17 +165,17 @@ Newest first. Format: `YYYY-MM-DD · Slice N · what was done · evidence (commi
 
 ### Open
 
-| ID      | Severity | Description                                                                                                                                                                                | Found in | Workaround / note                                           |
-| ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- | ----------------------------------------------------------- |
-| ISSUE-1 | minor    | Local Windows host has 32-bit MinGW GCC in PATH; `go test -race` fails locally with cc1 64-bit not compiled in. Standard `go test ./...` passes locally; CI runs `-race` on all 3 OSes. | Slice 0  | Install 64-bit MinGW-w64 on local Windows for local `-race` |
+| ID         | Severity | Description | Found in | Workaround / note |
+| ---------- | -------- | ----------- | -------- | ----------------- |
+| _none yet_ |          |             |          |                   |
 
 _Severity: `blocker` (stops a slice) · `major` · `minor` · `cosmetic`_
 
 ### Resolved
 
-| ID         | Description | Fixed in |
-| ---------- | ----------- | -------- |
-| _none yet_ |             |          |
+| ID      | Description                                                                                                                                                                                                         | Fixed in                                                                                                                     |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| ISSUE-1 | Local Windows host had 32-bit MinGW GCC in PATH; `go test -race` failed with cc1 64-bit not compiled in. Standard `go test ./...` passed locally; local `-race` needed 64-bit GCC.                                 | Pre-flight: installed 64-bit w64devkit GCC 16.2.0 in `C:\Users\ayush\w64devkit\bin` ahead in PATH. `go test -race ./...` passes. |
 
 ---
 
