@@ -262,3 +262,4 @@ func formatSnippet(content string, maxLines int) string {
 	}
 	return b.String()
 }
+

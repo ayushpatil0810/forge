@@ -38,6 +38,21 @@ func summarizeToolInput(name, rawInput string) string {
 	}
 
 	switch name {
+	case "edit_file":
+		if p, ok := inputMap["path"].(string); ok {
+			return fmt.Sprintf("Edit %s", p)
+		}
+	case "write_file":
+		if p, ok := inputMap["path"].(string); ok {
+			return fmt.Sprintf("Write %s", p)
+		}
+	case "bash":
+		cmd, _ := inputMap["command"].(string)
+		desc, _ := inputMap["description"].(string)
+		if desc != "" {
+			return fmt.Sprintf("$ %s (%s)", cmd, desc)
+		}
+		return fmt.Sprintf("$ %s", cmd)
 	case "read_file":
 		if p, ok := inputMap["path"].(string); ok {
 			return fmt.Sprintf("Read %s", p)
@@ -93,11 +108,13 @@ func (tc *ToolCard) Render(width int, expanded bool, styles Styles) string {
 
 	header := fmt.Sprintf("%s %s %s %s", icon, styles.AssistantText.Bold(true).Render(tc.Name), tc.Summary, statusSuffix)
 
-	if !expanded {
+	// For read-only tools, collapsed shows only the header.
+	// For bash, collapsed shows header plus last 10 lines of output; expanded shows all lines.
+	if !expanded && tc.Name != "bash" {
 		return header
 	}
 
-	// Expanded view: display card with output snippet
+	// Expanded or bash view: display card with output snippet
 	var content strings.Builder
 	content.WriteString(header)
 	content.WriteString("\n")
@@ -105,14 +122,26 @@ func (tc *ToolCard) Render(width int, expanded bool, styles Styles) string {
 	out := strings.TrimSpace(tc.Output)
 	if out == "" {
 		if tc.Status == agent.ToolRunning {
-			content.WriteString(styles.ToolCardOutput.Render("  [Running tool operation...]"))
+			content.WriteString(styles.ToolCardOutput.Render("  [Running operation...]"))
 		} else {
 			content.WriteString(styles.ToolCardOutput.Render("  (no output)"))
 		}
 	} else {
 		lines := strings.Split(out, "\n")
 		maxLines := 10
-		for i := 0; i < len(lines) && i < maxLines; i++ {
+		if expanded {
+			maxLines = len(lines)
+		}
+		// For bash when not expanded, show the last 10 lines
+		startIdx := 0
+		if !expanded && tc.Name == "bash" && len(lines) > maxLines {
+			startIdx = len(lines) - maxLines
+			content.WriteString("  ")
+			content.WriteString(styles.SystemInfo.Render(fmt.Sprintf("... [%d earlier lines hidden; Ctrl+O to expand]", startIdx)))
+			content.WriteString("\n")
+		}
+
+		for i := startIdx; i < len(lines) && (expanded || i < startIdx+maxLines); i++ {
 			line := lines[i]
 			if width > 10 && len(line) > width-8 {
 				line = line[:width-8] + "..."
@@ -121,9 +150,9 @@ func (tc *ToolCard) Render(width int, expanded bool, styles Styles) string {
 			content.WriteString(styles.ToolCardOutput.Render(line))
 			content.WriteString("\n")
 		}
-		if len(lines) > maxLines {
+		if !expanded && tc.Name != "bash" && len(lines) > maxLines {
 			content.WriteString("  ")
-			content.WriteString(styles.SystemInfo.Render(fmt.Sprintf("... [%d more lines]", len(lines)-maxLines)))
+			content.WriteString(styles.SystemInfo.Render(fmt.Sprintf("... [%d more lines; Ctrl+O to expand]", len(lines)-maxLines)))
 		}
 	}
 

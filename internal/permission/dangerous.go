@@ -52,3 +52,4 @@ func IsDangerousCommand(cmd string) (bool, string, string) {
 	}
 	return false, "", ""
 }
+

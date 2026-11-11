@@ -42,6 +42,10 @@ type Session interface {
 	Cancel()
 	// Usage returns the cumulative usage for the session.
 	Usage() Usage
+	// Mode returns the active permission mode.
+	Mode() permission.Mode
+	// SetMode dynamically updates the permission mode (SPEC §3.3).
+	SetMode(m permission.Mode)
 	// Close cancels, waits for the turn to stop, then closes Events.
 	Close()
 }

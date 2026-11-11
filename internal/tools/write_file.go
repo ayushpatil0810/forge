@@ -121,3 +121,4 @@ func (w WriteFile) Run(ctx context.Context, input json.RawMessage) (Result, erro
 		Output: fmt.Sprintf("Successfully wrote %d bytes to %s", len(args.Content), args.Path),
 	}, nil
 }
+

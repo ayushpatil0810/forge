@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/ayushpatil0810/forge/internal/agent"
+	"github.com/ayushpatil0810/forge/internal/permission"
 )
 
 type sessionClosedMsg struct{}
@@ -82,7 +83,9 @@ type Model struct {
 	providerName    string
 	modelName       string
 
-	ctrlCPressed bool
+	pendingApproval  *agent.ApprovalRequestedPayload
+	showApprovalDiff bool
+	ctrlCPressed     bool
 }
 
 // New creates a new TUI model bound to a Session.
@@ -116,6 +119,22 @@ func New(s agent.Session, theme Theme) Model {
 func (m *Model) SetProviderInfo(provider, model string) {
 	m.providerName = provider
 	m.modelName = model
+}
+
+func (m *Model) cyclePermissionMode() {
+	curr := m.session.Mode()
+	var next permission.Mode
+	switch curr {
+	case permission.ModeDefault: // "ask"
+		next = permission.ModeAcceptEdits
+	case permission.ModeAcceptEdits:
+		next = permission.ModePlan
+	case permission.ModePlan:
+		next = permission.ModeYOLO
+	default:
+		next = permission.ModeDefault
+	}
+	m.session.SetMode(next)
 }
 
 func (m Model) Init() tea.Cmd {
@@ -170,6 +189,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewportContent()
 
 	case tea.KeyMsg:
+		if m.pendingApproval != nil {
+			switch msg.String() {
+			case "y", "Y":
+				_ = m.session.Respond(m.pendingApproval.ID, agent.DecisionAllow)
+				m.pendingApproval = nil
+				m.textarea.Focus()
+				m.updateViewportContent()
+				return m, nil
+			case "n", "N":
+				_ = m.session.Respond(m.pendingApproval.ID, agent.DecisionDeny)
+				m.pendingApproval = nil
+				m.textarea.Focus()
+				m.updateViewportContent()
+				return m, nil
+			case "e", "E":
+				m.showApprovalDiff = !m.showApprovalDiff
+				m.updateViewportContent()
+				return m, nil
+			case "tab":
+				m.cyclePermissionMode()
+				m.updateViewportContent()
+				return m, nil
+			case "ctrl+c", "esc":
+				_ = m.session.Respond(m.pendingApproval.ID, agent.DecisionDeny)
+				m.pendingApproval = nil
+				m.textarea.Focus()
+				m.updateViewportContent()
+				return m, nil
+			default:
+				return m, nil
+			}
+		}
+
+		if msg.Type == tea.KeyTab && strings.TrimSpace(m.textarea.Value()) == "" {
+			m.cyclePermissionMode()
+			m.updateViewportContent()
+			return m, nil
+		}
+
 		switch msg.Type {
 		case tea.KeyCtrlC:
 			if m.ctrlCPressed {
@@ -212,6 +270,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			input := strings.TrimSpace(m.textarea.Value())
 			if input == "" || m.isStreaming {
+				return m, nil
+			}
+
+			if strings.HasPrefix(input, "/mode") {
+				parts := strings.Fields(input)
+				if len(parts) == 1 {
+					m.cyclePermissionMode()
+				} else {
+					targetMode := permission.Mode(parts[1])
+					m.session.SetMode(targetMode)
+				}
+				m.items = append(m.items, userMessage{text: input})
+				m.textarea.Reset()
+				m.updateViewportContent()
 				return m, nil
 			}
 
@@ -299,6 +371,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+		case agent.EventApprovalRequested:
+			if ev.Approval != nil {
+				m.pendingApproval = ev.Approval
+				m.showApprovalDiff = true
+				m.activityLabel = "Awaiting approval..."
+				m.textarea.Blur()
+				m.updateViewportContent()
+			}
+
 		case agent.EventUsageUpdated:
 			if ev.Usage != nil {
 				m.inputTokens = ev.Usage.InputTokens
@@ -308,6 +389,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case agent.EventDone:
 			m.isStreaming = false
+			m.pendingApproval = nil
+			m.textarea.Focus()
 			m.activityLabel = "Ready"
 			if m.currentResponse != "" {
 				if ev.Done != nil && ev.Done.Reason == "cancelled" {
@@ -321,6 +404,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case agent.EventError:
 			m.isStreaming = false
+			m.pendingApproval = nil
+			m.textarea.Focus()
 			m.activityLabel = "Error"
 			errMsg := "unknown error"
 			if ev.Err != nil {
@@ -366,6 +451,15 @@ func (m *Model) updateViewportContent() {
 		fullText.WriteString(rendered)
 	}
 
+	if m.pendingApproval != nil {
+		if fullText.Len() > 0 {
+			fullText.WriteString("\n\n")
+		}
+		modeStr := string(m.session.Mode())
+		card := RenderApprovalCard(m.pendingApproval, modeStr, m.showApprovalDiff, renderWidth, m.styles)
+		fullText.WriteString(card)
+	}
+
 	wasBottom := m.viewport.AtBottom()
 	m.viewport.SetContent(fullText.String())
 	if wasBottom || m.isStreaming {
@@ -393,19 +487,21 @@ func (m Model) View() string {
 		costInfo = fmt.Sprintf(" ($%.4f)", m.cost)
 	}
 
+	modeInfo := fmt.Sprintf("[%s] ", m.session.Mode())
+
 	if m.isStreaming {
-		status = fmt.Sprintf("%s%s %s", providerInfo, m.spinner.View(), m.activityLabel)
+		status = fmt.Sprintf("%s%s%s %s", modeInfo, providerInfo, m.spinner.View(), m.activityLabel)
 	} else if m.ctrlCPressed {
 		status = m.styles.ErrorText.Render("Press Ctrl+C again to quit")
 	} else {
-		status = m.styles.StatusBar.Render(fmt.Sprintf("%s%s · tokens: %d in / %d out%s", providerInfo, m.activityLabel, m.inputTokens, m.outputTokens, costInfo))
+		status = m.styles.StatusBar.Render(fmt.Sprintf("%s%s%s · tokens: %d in / %d out%s", modeInfo, providerInfo, m.activityLabel, m.inputTokens, m.outputTokens, costInfo))
 	}
 
 	toolToggle := "Ctrl+O: expand tools"
 	if m.toolsExpanded {
 		toolToggle = "Ctrl+O: collapse tools"
 	}
-	help := m.styles.HelpText.Render(fmt.Sprintf("Enter: send · Alt+Enter: newline · Esc: cancel · %s · Ctrl+C: quit", toolToggle))
+	help := m.styles.HelpText.Render(fmt.Sprintf("Enter: send · Alt+Enter: newline · Tab: mode · Esc: cancel · %s · Ctrl+C: quit", toolToggle))
 
 	return fmt.Sprintf(
 		"%s\n%s\n%s\n%s",

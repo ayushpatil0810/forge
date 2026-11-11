@@ -30,7 +30,7 @@ func (p Policy) Check(toolName string, req tools.ApprovalRequest) Verdict {
 		return Allow
 	}
 	// Dangerous commands (e.g. rm -rf /, pipe-to-shell, fork bombs) always ask regardless of mode
-	if req.IsDangerous {
+	if req.IsDangerous || (req.Command != "" && isCommandDangerous(req.Command)) {
 		return Ask
 	}
 	switch p.Mode {
@@ -51,4 +51,9 @@ func (p Policy) Check(toolName string, req tools.ApprovalRequest) Verdict {
 	default:
 		return Ask
 	}
+}
+
+func isCommandDangerous(cmd string) bool {
+	isDang, _, _ := IsDangerousCommand(cmd)
+	return isDang
 }

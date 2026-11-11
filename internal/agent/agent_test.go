@@ -349,3 +349,83 @@ func TestSendWhileBusyAndUnknownApproval(t *testing.T) {
 		t.Fatalf("want ErrUnknownApproval, got %v", err)
 	}
 }
+
+type fakeFailingBashTool struct{}
+
+func (fakeFailingBashTool) Name() string        { return "bash" }
+func (fakeFailingBashTool) Description() string { return "failing bash" }
+func (fakeFailingBashTool) Schema() json.RawMessage {
+	return json.RawMessage(`{}`)
+}
+func (fakeFailingBashTool) NeedsApproval(json.RawMessage) tools.ApprovalRequest {
+	return tools.ApprovalRequest{}
+}
+func (fakeFailingBashTool) Run(context.Context, json.RawMessage) (tools.Result, error) {
+	return tools.Result{Output: "FAIL: TestCalc failed", IsError: true}, nil
+}
+
+type fakeEditTool struct{}
+
+func (fakeEditTool) Name() string        { return "edit_file" }
+func (fakeEditTool) Description() string { return "fake edit" }
+func (fakeEditTool) Schema() json.RawMessage {
+	return json.RawMessage(`{}`)
+}
+func (fakeEditTool) NeedsApproval(json.RawMessage) tools.ApprovalRequest {
+	return tools.ApprovalRequest{}
+}
+func (fakeEditTool) Run(context.Context, json.RawMessage) (tools.Result, error) {
+	return tools.Result{Output: "edited"}, nil
+}
+
+func TestFixLoopStallGuard(t *testing.T) {
+	p := mock.New(
+		mock.Turn{mock.ToolUse("e1", "edit_file", map[string]any{"path": "a.go"})},
+		mock.Turn{mock.ToolUse("b1", "bash", map[string]any{"command": "go test ./..."})},
+		mock.Turn{mock.ToolUse("e2", "edit_file", map[string]any{"path": "a.go"})},
+		mock.Turn{mock.ToolUse("b2", "bash", map[string]any{"command": "go test ./..."})},
+		mock.Turn{mock.ToolUse("e3", "edit_file", map[string]any{"path": "a.go"})},
+		mock.Turn{mock.ToolUse("b3", "bash", map[string]any{"command": "go test ./..."})},
+	)
+	s := agent.NewLocal(agent.Config{
+		Provider: p,
+		Tools:    tools.NewRegistry(fakeFailingBashTool{}, fakeEditTool{}),
+	})
+	defer s.Close()
+
+	if err := s.Send(context.Background(), "fix the test"); err != nil {
+		t.Fatal(err)
+	}
+
+	for ev := range s.Events() {
+		if ev.Type == agent.EventError {
+			if ev.Err == nil || ev.Err.Code != "fix_loop_stalled" {
+				t.Fatalf("expected fix_loop_stalled code, got %+v", ev.Err)
+			}
+			return
+		}
+		if ev.Type == agent.EventDone {
+			t.Fatal("expected fix_loop_stalled error, got EventDone")
+		}
+	}
+}
+
+func TestSessionModeSwitching(t *testing.T) {
+	s := agent.NewLocal(agent.Config{
+		Provider: mock.New(),
+		Policy:   permission.Policy{Mode: permission.ModeDefault},
+	})
+	defer s.Close()
+
+	if s.Mode() != permission.ModeDefault {
+		t.Fatalf("expected initial mode ask, got %v", s.Mode())
+	}
+	s.SetMode(permission.ModeAcceptEdits)
+	if s.Mode() != permission.ModeAcceptEdits {
+		t.Fatalf("expected mode accept-edits, got %v", s.Mode())
+	}
+	s.SetMode(permission.ModePlan)
+	if s.Mode() != permission.ModePlan {
+		t.Fatalf("expected mode plan, got %v", s.Mode())
+	}
+}

@@ -126,3 +126,44 @@ func TestMarkdownRendererIncompleteFence(t *testing.T) {
 		t.Fatalf("expected output to contain code content, got:\n%s", rendered)
 	}
 }
+
+func TestTUIApprovalFlow(t *testing.T) {
+	p := mock.New()
+	s := agent.NewLocal(agent.Config{Provider: p})
+	defer s.Close()
+
+	m := tui.New(s, tui.DarkTheme())
+	newM, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = newM.(tui.Model)
+
+	// Simulate incoming ApprovalRequested event
+	appEvent := agent.Event{
+		Type: agent.EventApprovalRequested,
+		Approval: &agent.ApprovalRequestedPayload{
+			ID:          "app-1",
+			Tool:        "edit_file",
+			Description: "Edit main.go",
+			Diff:        "--- a\n+++ b\n@@ -1 +1 @@\n-bug\n+fix",
+		},
+	}
+	newM, _ = m.Update(appEvent)
+	m = newM.(tui.Model)
+
+	cleanView := stripANSI(m.View())
+	if !strings.Contains(cleanView, "Approval Required") {
+		t.Fatalf("expected approval prompt in view, got:\n%s", cleanView)
+	}
+	if !strings.Contains(cleanView, "Edit main.go") {
+		t.Fatalf("expected tool description in view, got:\n%s", cleanView)
+	}
+
+	// Press 'y' to approve
+	keyY := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}}
+	newM, _ = m.Update(keyY)
+	m = newM.(tui.Model)
+
+	afterY := stripANSI(m.View())
+	if strings.Contains(afterY, "Approval Required") {
+		t.Fatalf("expected approval prompt to clear after 'y', got:\n%s", afterY)
+	}
+}

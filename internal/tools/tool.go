@@ -23,10 +23,11 @@ type ApprovalRequest struct {
 	Diff        string `json:"diff,omitempty"`
 	IsProtected bool   `json:"isProtected,omitempty"`
 	IsDangerous bool   `json:"isDangerous,omitempty"`
+	Command     string `json:"command,omitempty"`
 }
 
 func (a ApprovalRequest) Required() bool {
-	return a.Description != "" || a.Diff != "" || a.IsProtected || a.IsDangerous
+	return a.Description != "" || a.Diff != "" || a.IsProtected || a.IsDangerous || a.Command != ""
 }
 
 // Tool abstraction from SPEC §6.3.

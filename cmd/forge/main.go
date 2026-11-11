@@ -31,6 +31,7 @@ var (
 	yesFlag      bool
 	providerFlag string
 	modelFlag    string
+	shellFlag    string
 )
 
 func newRootCmd() *cobra.Command {
@@ -52,6 +53,7 @@ func newRootCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&yesFlag, "yes", false, "auto-approve every action")
 	cmd.Flags().StringVar(&providerFlag, "provider", "", "LLM provider: anthropic, openai, gemini, mock (overrides config)")
 	cmd.Flags().StringVar(&modelFlag, "model", "", "model ID to use (overrides config)")
+	cmd.Flags().StringVar(&shellFlag, "shell", "", "shell to use for command execution (e.g. pwsh, powershell.exe, bash)")
 
 	return cmd
 }
@@ -61,6 +63,7 @@ func runForge(ctx context.Context, prompt string) error {
 		WorkspaceRoot: rootFlag,
 		Provider:      providerFlag,
 		Model:         modelFlag,
+		Shell:         shellFlag,
 	})
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -108,15 +111,24 @@ func runForge(ctx context.Context, prompt string) error {
 		provider = p
 	}
 
+	sh := tools.DetectShell(cfg.Shell)
+
 	systemPrompt := cfg.SystemPrompt
 	if systemPrompt == "" {
-		systemPrompt = agent.BuildSystemPrompt(cfg.WorkspaceRoot)
+		systemPrompt = agent.BuildSystemPrompt(cfg.WorkspaceRoot, sh)
+	}
+
+	permMode := permission.ModeDefault
+	if yesFlag {
+		permMode = permission.ModeYOLO
+	} else if cfg.PermissionMode != "" {
+		permMode = permission.Mode(cfg.PermissionMode)
 	}
 
 	s := agent.NewLocal(agent.Config{
 		Provider: provider,
-		Tools:    tools.DefaultTools(cfg.WorkspaceRoot),
-		Policy:   permission.Policy{Mode: permission.ModeDefault},
+		Tools:    tools.DefaultTools(cfg.WorkspaceRoot, sh),
+		Policy:   permission.Policy{Mode: permMode},
 		System:   systemPrompt,
 	})
 	defer s.Close()

@@ -35,3 +35,4 @@ func FuzzEditMatcher(f *testing.F) {
 		}
 	})
 }
+

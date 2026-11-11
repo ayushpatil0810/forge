@@ -22,3 +22,4 @@ func GenerateDiff(oldPath, newPath, oldContent, newContent string) string {
 	}
 	return strings.TrimSpace(text)
 }
+

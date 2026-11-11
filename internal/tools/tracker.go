@@ -64,3 +64,4 @@ func IsProtectedPath(p string) bool {
 	}
 	return false
 }
+

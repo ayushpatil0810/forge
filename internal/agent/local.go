@@ -47,8 +47,9 @@ type local struct {
 	seq    atomic.Int64
 	wg     sync.WaitGroup
 
-	mu        sync.Mutex // guards the fields below
-	running   bool
+	mu         sync.Mutex // guards the fields below
+	mutatingMu sync.Mutex // ensures bash, edit_file, write_file never run concurrently
+	running    bool
 	isClosed  bool
 	cancel    context.CancelFunc
 	pending   map[string]chan Decision
@@ -92,6 +93,18 @@ func (s *local) Usage() Usage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.usage
+}
+
+func (s *local) Mode() permission.Mode {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.Policy.Mode
+}
+
+func (s *local) SetMode(m permission.Mode) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cfg.Policy.Mode = m
 }
 
 func (s *local) Close() {
@@ -146,6 +159,8 @@ func (s *local) loop(ctx context.Context, prompt string) Event {
 
 	var lastToolCallsSig string
 	var consecutiveRepeats int
+	failingCmdCounts := make(map[string]int)
+	var lastEditKey string
 
 	for turn := 0; turn < s.cfg.MaxTurns; turn++ {
 		msg, err := s.streamModel(ctx)
@@ -189,7 +204,31 @@ func (s *local) loop(ctx context.Context, prompt string) Event {
 		// Always append one result per call, even when cancelled, or the
 		// history becomes invalid for the next request.
 		for _, call := range msg.ToolCalls {
-			s.history = append(s.history, s.runToolCall(ctx, call))
+			resMsg := s.runToolCall(ctx, call)
+			s.history = append(s.history, resMsg)
+
+			// Fix loop stall guard: if bash fails 3 times with the exact same file content, abort
+			if call.Name == "bash" && resMsg.IsError {
+				var bArgs struct {
+					Command string `json:"command"`
+				}
+				_ = json.Unmarshal(call.Input, &bArgs)
+				key := bArgs.Command + "@" + lastEditKey
+				failingCmdCounts[key]++
+				if failingCmdCounts[key] >= 3 {
+					return Event{
+						Type: EventError,
+						Err: &ErrorPayload{
+							Code:      "fix_loop_stalled",
+							Message:   fmt.Sprintf("detected stalled fix loop: command %q failed 3 times with identical file edits", bArgs.Command),
+							Retryable: false,
+						},
+					}
+				}
+			}
+			if (call.Name == "edit_file" || call.Name == "write_file") && !resMsg.IsError {
+				lastEditKey = string(call.Input)
+			}
 		}
 		if ctx.Err() != nil {
 			return Event{Type: EventDone, Done: &DonePayload{Reason: "cancelled"}}
@@ -293,8 +332,22 @@ func (s *local) runToolCall(ctx context.Context, c llm.ToolCall) llm.Message {
 		}
 	}
 
+	if isMutatingTool(c.Name) {
+		s.mutatingMu.Lock()
+		defer s.mutatingMu.Unlock()
+	}
+
 	start := time.Now()
-	res, err := t.Run(ctx, json.RawMessage(c.Input))
+	streamCtx := tools.ContextWithStream(ctx, func(chunk string) {
+		s.emit(Event{
+			Type: EventToolOutputDelta,
+			ToolOut: &ToolOutputDeltaPayload{
+				ID:    c.ID,
+				Chunk: chunk,
+			},
+		})
+	})
+	res, err := t.Run(streamCtx, json.RawMessage(c.Input))
 	if ctx.Err() != nil {
 		return result(ToolCancelled, "cancelled by user", "cancelled by user", start)
 	}
@@ -306,6 +359,10 @@ func (s *local) runToolCall(ctx context.Context, c llm.ToolCall) llm.Message {
 		return result(ToolError, out, out, start)
 	}
 	return result(ToolOK, out, "", start)
+}
+
+func isMutatingTool(name string) bool {
+	return name == "bash" || name == "edit_file" || name == "write_file"
 }
 
 func (s *local) isAlwaysAllowed(name string) bool {

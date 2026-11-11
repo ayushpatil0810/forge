@@ -19,6 +19,7 @@ type Config struct {
 	WorkspaceRoot  string `json:"workspace_root,omitempty"`
 	Theme          string `json:"theme,omitempty"`
 	SystemPrompt   string `json:"system_prompt,omitempty"`
+	Shell          string `json:"shell,omitempty"`
 }
 
 // LoadOptions represents caller/CLI overrides and path overrides.
@@ -33,6 +34,7 @@ type LoadOptions struct {
 	MaxTokens         int
 	Theme             string
 	SystemPrompt      string
+	Shell             string
 }
 
 // DefaultModelForProvider returns the sensible default model ID for a given provider.
@@ -157,6 +159,9 @@ func merge(dst *Config, src Config) {
 	if src.SystemPrompt != "" {
 		dst.SystemPrompt = src.SystemPrompt
 	}
+	if src.Shell != "" {
+		dst.Shell = src.Shell
+	}
 }
 
 func applyEnv(dst *Config) {
@@ -192,6 +197,9 @@ func applyEnv(dst *Config) {
 	if v := os.Getenv("FORGE_SYSTEM_PROMPT"); v != "" {
 		dst.SystemPrompt = v
 	}
+	if v := os.Getenv("FORGE_SHELL"); v != "" {
+		dst.Shell = v
+	}
 }
 
 func applyOptions(dst *Config, opts LoadOptions) {
@@ -222,5 +230,8 @@ func applyOptions(dst *Config, opts LoadOptions) {
 	}
 	if opts.SystemPrompt != "" {
 		dst.SystemPrompt = opts.SystemPrompt
+	}
+	if opts.Shell != "" {
+		dst.Shell = opts.Shell
 	}
 }
