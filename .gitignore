@@ -1,4 +1,6 @@
 /bin/
 /dist/
+forge
+*.exe
 *.test
 .DS_Store
