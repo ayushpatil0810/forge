@@ -38,7 +38,7 @@ Ordered so that **a working end-to-end product exists as early as possible**. Af
 
 Spec references (e.g. `A-1`) point to requirement IDs in `SPEC.md`.
 
-### Slice 0: Skeleton and CI `DONE`
+### Slice 0: Skeleton and CI `DOING` (exit check passes locally under `-race`; awaiting human confirmation of CI)
 
 _Goal: a buildable, tested, empty shell._
 
@@ -84,15 +84,28 @@ _Goal: first demoable thing. Streaming chat, no tools yet._
 _Goal: the agent can answer questions about a codebase._
 
 - [ ] Tool registry and JSON-schema declaration
-- [ ] `read_file` (line ranges, size cap)
-- [ ] `list_dir` / `glob` (respects `.gitignore`)
-- [ ] `grep`
+- [ ] `read_file` (line ranges, size cap, binary check, truncation marker)
+- [ ] `list_dir` / `glob` (respects `.gitignore`, `**` support, sorted)
+- [ ] `grep` (pure Go regex search, skips binary/ignored paths, truncation marker)
 - [ ] Workspace path confinement `SEC-8`
 - [ ] Tool output truncation with "more available" marker
-- [ ] Tool-call cards in TUI (status, duration, collapsible) `T-2`
-- [ ] `AGENTS.md` loaded into the system prompt `S-5`
+- [ ] Tool-call cards in TUI (status, duration, collapsible `Ctrl+O`) `T-2`
+- [ ] `AGENTS.md` / `CLAUDE.md` loaded into the system prompt `S-5`
 
 **Exit check:** "Explain how this repo is structured" works on a fixture repo, with visible tool cards and no writes.
+
+### Slice 3b: Multi-provider: OpenAI + Gemini `TODO`
+
+_Goal: provider-agnostic core with OpenAI and Gemini streaming, catalog, and shared retry/contract suite._
+
+- [ ] Shared provider contract test suite (`httptest` recorded SSE fixtures)
+- [ ] Shared retry/backoff package (`internal/llm/retry`)
+- [ ] OpenAI provider with streaming and tool calls (`L-3`)
+- [ ] Gemini provider with streaming and schema sanitizer (`L-4`)
+- [ ] Layered config `--provider` and `--model` wiring with factory
+- [ ] Token cost tracking and display in TUI footer
+
+**Exit check:** the provider contract test suite passes for Anthropic, OpenAI, and Gemini under `-race`.
 
 ### Slice 4: Edit + approve (the agent can change code) `TODO`
 
@@ -143,7 +156,7 @@ Do not start until Slice 6 is `DONE`.
 - [ ] Permission policy file and audit log `P-4` `P-7`
 - [ ] Context compaction and budgets `A-6` `A-7`
 - [ ] Headless mode (`forge run`) `§3.7`
-- [ ] Multi-provider (OpenAI, Gemini, Ollama) `L-3` `L-4` `L-5`
+- [ ] Ollama / local models `L-5`
 - [ ] Eval harness `§9.2`
 - [ ] MCP client, repo map, custom slash commands
 - [ ] Desktop app (Phase 4)
@@ -186,6 +199,8 @@ Record anything that deviates from, resolves, or adds to `SPEC.md`. Newest first
 
 | Date       | Decision                                                                 | Reason                                                                             | Spec impact        |
 | ---------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- | ------------------ |
+| 2026-11-12 | Headless execution path `forge [prompt]`                                 | Retained from prototype for non-interactive scripts; scoped without extension      | `cmd/forge`        |
+| 2026-11-12 | Updated Anthropic catalog to 5.x lineup (default `claude-sonnet-5-5`)    | Official docs (https://docs.anthropic.com/en/docs/about-claude/models); retired 3.x removed | `internal/llm/anthropic` |
 | 2026-11-12 | Raw HTTP + SSE for Anthropic provider                                    | SPEC §11, zero SDK dependencies, complete control over retries, backoff, and events | `internal/llm/anthropic` |
 | 2026-11-12 | Bubble Tea v1 ecosystem (`bubbletea v1.3.4`, `bubbles v0.20.0`, `lipgloss v1.0.0`, `glamour v0.8.0`) | Stable production releases across the Charm ecosystem, full cross-compatibility   | `internal/tui`     |
 | 2026-11-12 | Throttled markdown rendering (40ms) with unclosed code fence recovery    | Prevents rendering flicker and layout breaks during token streaming (T-1)          | `internal/tui`     |

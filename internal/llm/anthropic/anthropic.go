@@ -20,36 +20,29 @@ import (
 	"github.com/ayushpatil0810/forge/internal/llm"
 )
 
+// Source documentation:
+// - Models overview & pricing: https://docs.anthropic.com/en/docs/about-claude/models
+// - Model deprecations: https://docs.anthropic.com/en/docs/resources/model-deprecations
 const (
 	defaultEndpoint   = "https://api.anthropic.com/v1/messages"
 	defaultAPIVersion = "2023-06-01"
-	defaultModel      = "claude-3-5-sonnet-20241022"
+	// Default model is claude-sonnet-5-5: active flagship offering the optimal
+	// balance of reasoning capability, 1M context window, and price ($2/M in, $10/M out).
+	defaultModel      = "claude-sonnet-5-5"
 	maxRetries        = 3
 	initialBackoff    = 300 * time.Millisecond
 	maxBackoff        = 8 * time.Second
 )
 
+// Active, non-deprecated Anthropic models per official documentation.
+// Retired models (claude-3-5-sonnet-*, claude-3-5-haiku-*, claude-3-7-sonnet-*) have been removed.
 var catalog = []llm.ModelInfo{
 	{
-		ID:            "claude-3-7-sonnet-20250219",
-		Name:          "Claude 3.7 Sonnet",
-		ContextWindow: 200000,
-		InputPrice:    3.00,
-		OutputPrice:   15.00,
-	},
-	{
-		ID:            "claude-3-5-sonnet-20241022",
-		Name:          "Claude 3.5 Sonnet",
-		ContextWindow: 200000,
-		InputPrice:    3.00,
-		OutputPrice:   15.00,
-	},
-	{
-		ID:            "claude-3-5-haiku-20241022",
-		Name:          "Claude 3.5 Haiku",
-		ContextWindow: 200000,
-		InputPrice:    0.80,
-		OutputPrice:   4.00,
+		ID:            "claude-sonnet-5-5",
+		Name:          "Claude Sonnet 5.5",
+		ContextWindow: 1000000,
+		InputPrice:    2.00,
+		OutputPrice:   10.00,
 	},
 	{
 		ID:            "claude-opus-5-5",
@@ -57,6 +50,20 @@ var catalog = []llm.ModelInfo{
 		ContextWindow: 1000000,
 		InputPrice:    4.00,
 		OutputPrice:   20.00,
+	},
+	{
+		ID:            "claude-haiku-5-5",
+		Name:          "Claude Haiku 5.5",
+		ContextWindow: 1000000,
+		InputPrice:    0.10,
+		OutputPrice:   0.50,
+	},
+	{
+		ID:            "claude-fable-5-2",
+		Name:          "Claude Fable 5.2",
+		ContextWindow: 1000000,
+		InputPrice:    8.00,
+		OutputPrice:   40.00,
 	},
 }
 
@@ -382,3 +389,4 @@ func dispatchSSE(ctx context.Context, eventType string, data []byte, ch chan<- l
 	}
 	return nil
 }
+

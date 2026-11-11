@@ -97,3 +97,4 @@ func NewStyles(t Theme) Styles {
 			Foreground(t.Secondary),
 	}
 }
+

@@ -36,7 +36,7 @@ type LoadOptions struct {
 // DefaultConfig returns sensible hardcoded defaults.
 func DefaultConfig() Config {
 	return Config{
-		Model:          "claude-3-5-sonnet-20241022",
+		Model:          "claude-sonnet-5-5",
 		MaxTurns:       40,
 		MaxTokens:      4096,
 		PermissionMode: "ask",

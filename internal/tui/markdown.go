@@ -65,3 +65,4 @@ func closeIncompleteFences(md string) string {
 	}
 	return md
 }
+
