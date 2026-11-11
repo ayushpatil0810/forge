@@ -28,7 +28,7 @@
 
 ## 1. Current focus
 
-> Slice 4: Edit + approve (safe code modifications with human-in-the-loop review).
+> Slice 6: MVP hardening and demo (polish config, error handling, themes, demo, and distribution).
 
 ---
 
@@ -79,7 +79,7 @@ _Goal: first demoable thing. Streaming chat, no tools yet._
 
 **Exit check:** `forge` opens, streams a multi-paragraph answer with a highlighted code block, and `Esc` stops it cleanly.
 
-### Slice 3: Read-only tools (agent can explore a repo) `DONE`
+### Slice 3: Read-only tools (agent can explore a repo) `DOING (awaiting live verification)`
 
 _Goal: the agent can answer questions about a codebase._
 
@@ -94,7 +94,7 @@ _Goal: the agent can answer questions about a codebase._
 
 **Exit check:** "Explain how this repo is structured" works on a fixture repo, with visible tool cards and no writes.
 
-### Slice 3b: Multi-provider: OpenAI + Gemini `DONE`
+### Slice 3b: Multi-provider: OpenAI + Gemini `DOING (awaiting live verification)`
 
 _Goal: provider-agnostic core with OpenAI and Gemini streaming, catalog, and shared retry/contract suite._
 
@@ -107,30 +107,30 @@ _Goal: provider-agnostic core with OpenAI and Gemini streaming, catalog, and sha
 
 **Exit check:** the provider contract test suite passes for Anthropic, OpenAI, and Gemini under `-race`.
 
-### Slice 4: Edit + approve (the agent can change code) `TODO`
+### Slice 4: Edit + approve (the agent can change code) `DOING (awaiting live verification)`
 
 _Goal: safe edits with human-in-the-loop. This is the core product moment._
 
-- [ ] `edit_file`: exact match, unique-match required, actionable errors
-- [ ] `write_file`
-- [ ] Unified diff generation
-- [ ] Approval request/response flow with IDs (`ApprovalRequested` / `Respond`) `P-2`
-- [ ] Inline diff view in TUI with approve / reject keys `T-3`
-- [ ] Permission modes: `ask` (default) and `plan` (read-only) `P-1`
-- [ ] Re-read file after edit; fuzz or property tests for the edit matcher
+- [x] `edit_file`: exact match, unique-match required, actionable errors
+- [x] `write_file`
+- [x] Unified diff generation
+- [x] Approval request/response flow with IDs (`ApprovalRequested` / `Respond`) `P-2`
+- [x] Inline diff view in TUI with approve / reject keys `T-3`
+- [x] Permission modes: `ask` (default) and `plan` (read-only) `P-1`
+- [x] Re-read file after edit; fuzz or property tests for the edit matcher
 
 **Exit check:** agent proposes an edit, user sees the diff, approves, file changes; rejecting leaves the file untouched.
 
-### Slice 5: Bash + autonomous fix loop `TODO`
+### Slice 5: Bash + autonomous fix loop `DOING (awaiting live verification)`
 
 _Goal: the MVP "fix a failing test" scenario works end-to-end._
 
-- [ ] `bash` tool: timeout, output cap, process-group kill
-- [ ] Streaming bash output events (`ToolOutputDelta`)
-- [ ] Approval prompt shows exact command
-- [ ] `accept-edits` mode `P-1`
-- [ ] Basic dangerous-command pattern check `SEC-3`
-- [ ] Windows shell handling decision implemented (see Decisions)
+- [x] `bash` tool: timeout, output cap, process-group kill
+- [x] Streaming bash output events (`ToolOutputDelta`)
+- [x] Approval prompt shows exact command
+- [x] `accept-edits` mode `P-1`
+- [x] Basic dangerous-command pattern check `SEC-3`
+- [x] Windows shell handling decision implemented (see Decisions)
 
 **Exit check (MVP exit criteria from SPEC §10):** given a fixture Go repo with a failing test, the agent finds the bug, edits the code, runs `go test`, and reports success, entirely within the TUI.
 
@@ -169,6 +169,8 @@ Newest first. Format: `YYYY-MM-DD · Slice N · what was done · evidence (commi
 
 | Date       | Slice | What                                                                                                                      | Evidence                                              |
 | ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| 2026-11-12 | 5     | Bash tool with live output streaming, process-tree termination (Windows Job Object + POSIX process groups), dangerous command detector, fix loop guard, and automated test-fix verification on 3 fixtures | `TestSlice5_FixLoopExitCheck` passes (56.04s) across offbyone, nilpanic, wrongimport; all tests pass under `-race`; commit 7d6d739 |
+| 2026-11-12 | 4     | `edit_file` with unique matching, line-ending preservation (CRLF/LF), read-before-write guard, `write_file`, unified diffs, approval prompts with diff views in TUI | `TestEditFile_Table`, `FuzzEditMatcher`, `TestTUIApprovalFlow` pass under `-race`; commit 38ea9b9 |
 | 2026-11-12 | 3b    | Multi-provider support (OpenAI `/v1/chat/completions`, Gemini Developer API with schema sanitizer), shared `internal/llm/retry`, provider factory `llm.NewProvider`, `--provider`/`--model` flags, TUI token cost tracking | All 10 contract suite tests pass for Anthropic, OpenAI, Gemini under `-race`; commit 0f8ea60 |
 | 2026-11-12 | 3     | Read-only tools (`read_file`, `list_dir`, `glob`, `grep`), SEC-8 workspace path confinement, SEC-1 system prompt with `AGENTS.md` / `CLAUDE.md`, collapsible tool cards (`Ctrl+O`) in TUI | `TestExplainRepoStructureEndToEnd` fixture test and tool card tests pass under `-race`; commit 93ae114 |
 | 2026-11-12 | 2     | Anthropic streaming provider (raw HTTP+SSE, retry with backoff/jitter, models catalog), Bubble Tea TUI (viewport, textarea, spinner, Glamour/Chroma markdown), CLI wiring | Unit/TUI/race tests pass, commit d0cd438             |
@@ -201,6 +203,12 @@ Record anything that deviates from, resolves, or adds to `SPEC.md`. Newest first
 
 | Date       | Decision                                                                 | Reason                                                                             | Spec impact        |
 | ---------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- | ------------------ |
+| 2026-11-12 | Windows native shell auto-detection (`pwsh` -> `powershell.exe` -> `cmd.exe`) with `-NoProfile -NonInteractive` | Native Windows execution without requiring bash/msys; configurable via `--shell` / `FORGE_SHELL` / config | `internal/tools`   |
+| 2026-11-12 | Process tree termination via Windows Job Object and POSIX process groups | Guarantees all descendant child processes terminate on timeout or Esc cancellation | `internal/tools`   |
+| 2026-11-12 | Head/tail truncation for bash tool output (10KB head, 20KB tail)          | Retains compiler diagnostics at top and test failure summaries at bottom within 30KB cap | `internal/tools`   |
+| 2026-11-12 | Table-driven dangerous command classifier in `internal/permission`       | Enforces approval even in accept-edits and YOLO modes for destructive commands     | `internal/permission` |
+| 2026-11-12 | Unified diff generation via `pmezard/go-difflib`                         | Standardized, high-quality unified diff formatting for approvals and reviews       | `internal/tools`   |
+| 2026-11-12 | Fix loop stall guard in `Session` (same command 3x with identical state) | Prevents runaway token waste when a repeated fix attempt does not work             | `internal/agent`   |
 | 2026-11-12 | Gemini Developer API with JSON schema sanitizer                          | Direct API key access via GEMINI_API_KEY/GOOGLE_API_KEY without GCP project setup   | `internal/llm/gemini` |
 | 2026-11-12 | OpenAI Chat Completions API (`/v1/chat/completions`) for OpenAI provider | Maximum compatibility across OpenAI proxies (Ollama, vLLM, OpenRouter, LocalAI)   | `internal/llm/openai` |
 | 2026-11-12 | Provider factory registry pattern (`llm.RegisterProvider`)               | Avoids circular import cycles between `internal/llm` and individual provider pkgs  | `internal/llm`     |
@@ -217,7 +225,6 @@ Record anything that deviates from, resolves, or adds to `SPEC.md`. Newest first
 | _pending_  | Project name (placeholder: `forge`)                                      | SPEC §14 Q1                                                                        | Rename across repo |
 | _pending_  | License                                                                  | SPEC §14 Q2                                                                        | None               |
 | _pending_  | Wails v2 vs v3                                                           | SPEC §14 Q3; decide before desktop spike                                           | Desktop phase      |
-| _pending_  | Windows shell strategy                                                   | SPEC §14 Q4; needed by Slice 5                                                     | `bash` tool        |
 | _pending_  | First provider = Anthropic                                               | SPEC §14 Q7                                                                        | None (matches spec)|
 
 _Convert a `_pending_` row to a dated row when decided. If a decision changes a requirement, also update `SPEC.md`._
@@ -226,6 +233,6 @@ _Convert a `_pending_` row to a dated row when decided. If a decision changes a 
 
 ## 6. Next 3 actions
 
-1. Slice 4: Implement `edit_file` with exact unique-match search/replace and actionable error messages.
-2. Slice 4: Implement `write_file` and unified diff generation for human-in-the-loop approval requests (`P-2`).
-3. Slice 4: Build interactive diff view in Bubble Tea TUI with approve / reject keybindings (`T-3`) and permission modes (`P-1`).
+1. Slice 6: Complete layered config documentation and error displays for provider and tool failures.
+2. Slice 6: Implement centralized theme token architecture in `themes/` supporting light and dark palettes (`T-8`).
+3. Slice 6: Build README install guide, record VHS demo GIF, and configure first tagged pre-release (`v0.1.0`) snapshot.
