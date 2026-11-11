@@ -3,7 +3,7 @@
 > Living status file. **Agents: read this file before starting work, and update it after every task.**
 > Source of truth for requirements is `SPEC.md`. This file tracks execution only.
 
-**Last updated:** YYYY-MM-DD by <agent/human>
+**Last updated:** 2026-11-12 by lead engineer
 **Current phase:** Phase 0 (Foundations) → Phase 1 (MVP)
 
 ---
@@ -28,7 +28,7 @@
 
 ## 1. Current focus
 
-> Slice 0: repo skeleton and CI green.
+> Slice 1: Core contracts + mock provider.
 
 ---
 
@@ -38,19 +38,19 @@ Ordered so that **a working end-to-end product exists as early as possible**. Af
 
 Spec references (e.g. `A-1`) point to requirement IDs in `SPEC.md`.
 
-### Slice 0: Skeleton and CI `TODO`
+### Slice 0: Skeleton and CI `DONE`
 
 _Goal: a buildable, tested, empty shell._
 
-- [ ] `go mod init`, single module, directory layout from SPEC §6.2
-- [ ] Cobra entrypoint: `forge`, `forge --version`
-- [ ] CI: build, `go vet`, lint, `go test -race ./...` on Linux/macOS/Windows
-- [ ] Makefile or Taskfile (`build`, `test`, `lint`, `run`)
-- [ ] Layered config loader stub (defaults, user, project, env, flags) `S-6`
+- [x] `go mod init`, single module, directory layout from SPEC §6.2
+- [x] Cobra entrypoint: `forge`, `forge --version`
+- [x] CI: build, `go vet`, lint, `go test -race ./...` on Linux/macOS/Windows
+- [x] Makefile or Taskfile (`build`, `test`, `lint`, `run`)
+- [x] Layered config loader stub (defaults, user, project, env, flags) `S-6`
 
 **Exit check:** `go build ./... && go test -race ./...` passes in CI on all three OSes.
 
-### Slice 1: Core contracts + mock provider `TODO`
+### Slice 1: Core contracts + mock provider `DOING`
 
 _Goal: the interfaces both frontends will rely on, testable with no network._
 
@@ -154,9 +154,9 @@ Do not start until Slice 6 is `DONE`.
 
 Newest first. Format: `YYYY-MM-DD · Slice N · what was done · evidence (commit/test)`
 
-| Date       | Slice | What | Evidence |
-| ---------- | ----- | ---- | -------- |
-| _none yet_ |       |      |          |
+| Date       | Slice | What                                                                                                                      | Evidence                                              |
+| ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| 2026-11-12 | 0     | Skeleton, Cobra CLI (`--version`), CI workflow (Linux/macOS/Windows), Makefile, layered config loader (defaults/user/project/env/flags) | `go build ./... && go test ./...` pass; commit 1d25f9a |
 
 ---
 
@@ -164,9 +164,9 @@ Newest first. Format: `YYYY-MM-DD · Slice N · what was done · evidence (commi
 
 ### Open
 
-| ID         | Severity | Description | Found in | Workaround / note |
-| ---------- | -------- | ----------- | -------- | ----------------- |
-| _none yet_ |          |             |          |                   |
+| ID      | Severity | Description                                                                                                                                                                                | Found in | Workaround / note                                           |
+| ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- | ----------------------------------------------------------- |
+| ISSUE-1 | minor    | Local Windows host has 32-bit MinGW GCC in PATH; `go test -race` fails locally with cc1 64-bit not compiled in. Standard `go test ./...` passes locally; CI runs `-race` on all 3 OSes. | Slice 0  | Install 64-bit MinGW-w64 on local Windows for local `-race` |
 
 _Severity: `blocker` (stops a slice) · `major` · `minor` · `cosmetic`_
 
@@ -182,13 +182,15 @@ _Severity: `blocker` (stops a slice) · `major` · `minor` · `cosmetic`_
 
 Record anything that deviates from, resolves, or adds to `SPEC.md`. Newest first.
 
-| Date      | Decision                            | Reason                                   | Spec impact         |
-| --------- | ----------------------------------- | ---------------------------------------- | ------------------- |
-| _pending_ | Project name (placeholder: `forge`) | SPEC §14 Q1                              | Rename across repo  |
-| _pending_ | License                             | SPEC §14 Q2                              | None                |
-| _pending_ | Wails v2 vs v3                      | SPEC §14 Q3; decide before desktop spike | Desktop phase       |
-| _pending_ | Windows shell strategy              | SPEC §14 Q4; needed by Slice 5           | `bash` tool         |
-| _pending_ | First provider = Anthropic          | SPEC §14 Q7                              | None (matches spec) |
+| Date       | Decision                                   | Reason                                                        | Spec impact        |
+| ---------- | ------------------------------------------ | ------------------------------------------------------------- | ------------------ |
+| 2026-11-12 | Use `github.com/spf13/cobra` v1.10.2       | SPEC §11, actively maintained standard Go CLI                 | CLI entrypoint     |
+| 2026-11-12 | Standard library for layered config loader | Self-contained, zero-dependency, satisfies S-6                | `internal/config`  |
+| _pending_  | Project name (placeholder: `forge`)        | SPEC §14 Q1                                                   | Rename across repo |
+| _pending_  | License                                    | SPEC §14 Q2                                                   | None               |
+| _pending_  | Wails v2 vs v3                             | SPEC §14 Q3; decide before desktop spike                      | Desktop phase      |
+| _pending_  | Windows shell strategy                     | SPEC §14 Q4; needed by Slice 5                                | `bash` tool        |
+| _pending_  | First provider = Anthropic                 | SPEC §14 Q7                                                   | None (matches spec)|
 
 _Convert a `_pending_` row to a dated row when decided. If a decision changes a requirement, also update `SPEC.md`._
 
@@ -196,6 +198,6 @@ _Convert a `_pending_` row to a dated row when decided. If a decision changes a 
 
 ## 6. Next 3 actions
 
-1. Slice 0: run `go mod init`, create the directory layout from SPEC §6.2, and add the Cobra `forge --version` entrypoint.
-2. Slice 0: set up CI (build, vet, lint, `go test -race`) on Linux, macOS, and Windows.
-3. Slice 1: define the `Event`, `Session`, `Provider`, and `Tool` types with JSON tags.
+1. Slice 1: define `Event` types (SPEC §6.4) and `Session`/`Provider`/`Tool` interfaces (SPEC §6.3).
+2. Slice 1: enhance mock provider for scripted/recorded transcripts and add repeated tool call loop guard.
+3. Slice 1: write comprehensive loop tests with mock provider (two tool calls to Done, context cancellation, runaway guards).
