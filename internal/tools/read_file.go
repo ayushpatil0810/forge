@@ -17,7 +17,8 @@ const (
 )
 
 type ReadFile struct {
-	Root string
+	Root    string
+	Tracker *ReadTracker
 }
 
 const readFileSchema = `{
@@ -143,6 +144,10 @@ func (r ReadFile) Run(_ context.Context, input json.RawMessage) (Result, error) 
 	if end < totalLines {
 		remaining := totalLines - end
 		fmt.Fprintf(&b, "... [%d more lines available in %s; use offset=%d to read more]\n", remaining, args.Path, end+1)
+	}
+
+	if r.Tracker != nil {
+		r.Tracker.MarkRead(args.Path)
 	}
 
 	return Result{Output: b.String()}, nil

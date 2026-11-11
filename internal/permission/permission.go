@@ -29,12 +29,20 @@ func (p Policy) Check(toolName string, req tools.ApprovalRequest) Verdict {
 	if !req.Required() {
 		return Allow
 	}
+	// Dangerous commands (e.g. rm -rf /, pipe-to-shell, fork bombs) always ask regardless of mode
+	if req.IsDangerous {
+		return Ask
+	}
 	switch p.Mode {
 	case ModePlan:
 		return Deny
 	case ModeYOLO:
 		return Allow
 	case ModeAcceptEdits:
+		// Protected paths (.git/, .env*, keys) still require confirmation (SPEC §3.3 P-6)
+		if req.IsProtected {
+			return Ask
+		}
 		// If it's an edit with diff, allow without prompting; exec asks.
 		if req.Diff != "" {
 			return Allow
