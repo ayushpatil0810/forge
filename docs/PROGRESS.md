@@ -28,7 +28,7 @@
 
 ## 1. Current focus
 
-> Slice 1: Core contracts + mock provider.
+> Slice 2: Chat with a real model in the terminal.
 
 ---
 
@@ -50,17 +50,17 @@ _Goal: a buildable, tested, empty shell._
 
 **Exit check:** `go build ./... && go test -race ./...` passes in CI on all three OSes.
 
-### Slice 1: Core contracts + mock provider `DOING`
+### Slice 1: Core contracts + mock provider `DONE`
 
 _Goal: the interfaces both frontends will rely on, testable with no network._
 
-- [ ] `Event` types (SPEC §6.4), JSON-serializable
-- [ ] `Session`, `Provider`, `Tool` interfaces (SPEC §6.3)
-- [ ] Mock provider that replays scripted/recorded transcripts
-- [ ] Minimal agent loop: model call → tool dispatch → result → repeat `A-1` `A-2`
-- [ ] Loop guards: max iterations, repeated identical call detection `A-5`
-- [ ] Context cancellation wired through loop `A-4`
-- [ ] Loop tests using mock provider (including cancel and runaway cases)
+- [x] `Event` types (SPEC §6.4), JSON-serializable
+- [x] `Session`, `Provider`, `Tool` interfaces (SPEC §6.3)
+- [x] Mock provider that replays scripted/recorded transcripts
+- [x] Minimal agent loop: model call → tool dispatch → result → repeat `A-1` `A-2`
+- [x] Loop guards: max iterations, repeated identical call detection `A-5`
+- [x] Context cancellation wired through loop `A-4`
+- [x] Loop tests using mock provider (including cancel and runaway cases)
 
 **Exit check:** a scripted transcript with two tool calls runs to `Done` in a test; cancellation test passes under `-race`.
 
@@ -156,6 +156,7 @@ Newest first. Format: `YYYY-MM-DD · Slice N · what was done · evidence (commi
 
 | Date       | Slice | What                                                                                                                      | Evidence                                              |
 | ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| 2026-11-12 | 1     | Core contracts (`Session`, `Provider`, `Tool`, typed `Event` payloads), mock replay provider, agent loop with cancellation, loop guards (max turns and repeated calls), full unit/loop tests | `TestScriptedTranscriptWithTwoToolCallsRunsToDone` and `TestCancellationWithContext` pass; commit 3293d66 |
 | 2026-11-12 | 0     | Skeleton, Cobra CLI (`--version`), CI workflow (Linux/macOS/Windows), Makefile, layered config loader (defaults/user/project/env/flags) | `go build ./... && go test ./...` pass; commit 1d25f9a |
 
 ---
@@ -182,15 +183,17 @@ _Severity: `blocker` (stops a slice) · `major` · `minor` · `cosmetic`_
 
 Record anything that deviates from, resolves, or adds to `SPEC.md`. Newest first.
 
-| Date       | Decision                                   | Reason                                                        | Spec impact        |
-| ---------- | ------------------------------------------ | ------------------------------------------------------------- | ------------------ |
-| 2026-11-12 | Use `github.com/spf13/cobra` v1.10.2       | SPEC §11, actively maintained standard Go CLI                 | CLI entrypoint     |
-| 2026-11-12 | Standard library for layered config loader | Self-contained, zero-dependency, satisfies S-6                | `internal/config`  |
-| _pending_  | Project name (placeholder: `forge`)        | SPEC §14 Q1                                                   | Rename across repo |
-| _pending_  | License                                    | SPEC §14 Q2                                                   | None               |
-| _pending_  | Wails v2 vs v3                             | SPEC §14 Q3; decide before desktop spike                      | Desktop phase      |
-| _pending_  | Windows shell strategy                     | SPEC §14 Q4; needed by Slice 5                                | `bash` tool        |
-| _pending_  | First provider = Anthropic                 | SPEC §14 Q7                                                   | None (matches spec)|
+| Date       | Decision                                                  | Reason                                                        | Spec impact        |
+| ---------- | --------------------------------------------------------- | ------------------------------------------------------------- | ------------------ |
+| 2026-11-12 | Aligned `Tool` interface with SPEC §6.3                   | Exact contract: `Name()`, `Description()`, `Schema()`, `Run()`, `NeedsApproval()` | `internal/tools` |
+| 2026-11-12 | Added repeated identical call detection in loop guard      | Breaks runaway loops when consecutive calls are identical (A-5) | `internal/agent` |
+| 2026-11-12 | Use `github.com/spf13/cobra` v1.10.2                      | SPEC §11, actively maintained standard Go CLI                 | CLI entrypoint     |
+| 2026-11-12 | Standard library for layered config loader                | Self-contained, zero-dependency, satisfies S-6                | `internal/config`  |
+| _pending_  | Project name (placeholder: `forge`)                       | SPEC §14 Q1                                                   | Rename across repo |
+| _pending_  | License                                                   | SPEC §14 Q2                                                   | None               |
+| _pending_  | Wails v2 vs v3                                            | SPEC §14 Q3; decide before desktop spike                      | Desktop phase      |
+| _pending_  | Windows shell strategy                                    | SPEC §14 Q4; needed by Slice 5                                | `bash` tool        |
+| _pending_  | First provider = Anthropic                                | SPEC §14 Q7                                                   | None (matches spec)|
 
 _Convert a `_pending_` row to a dated row when decided. If a decision changes a requirement, also update `SPEC.md`._
 
@@ -198,6 +201,6 @@ _Convert a `_pending_` row to a dated row when decided. If a decision changes a 
 
 ## 6. Next 3 actions
 
-1. Slice 1: define `Event` types (SPEC §6.4) and `Session`/`Provider`/`Tool` interfaces (SPEC §6.3).
-2. Slice 1: enhance mock provider for scripted/recorded transcripts and add repeated tool call loop guard.
-3. Slice 1: write comprehensive loop tests with mock provider (two tool calls to Done, context cancellation, runaway guards).
+1. Slice 2: implement Anthropic streaming provider adapter (`internal/llm/anthropic`) with exponential backoff on transient errors (`L-1`, `L-2`, `A-8`).
+2. Slice 2: build Bubble Tea TUI shell (`internal/tui`) with viewport, multiline input, and send/receive (`T-4`).
+3. Slice 2: render streaming markdown with Glamour, syntax highlighting with Chroma (`T-1`), and hook up `Esc` cancellation (`A-4`).
