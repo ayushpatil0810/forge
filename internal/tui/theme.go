@@ -62,14 +62,18 @@ func AdaptiveTheme() Theme {
 }
 
 type Styles struct {
-	UserPrompt    lipgloss.Style
-	AssistantText lipgloss.Style
-	SystemInfo    lipgloss.Style
-	ErrorText     lipgloss.Style
-	StatusBar     lipgloss.Style
-	HelpText      lipgloss.Style
-	BorderBox     lipgloss.Style
-	ActivityLabel lipgloss.Style
+	UserPrompt      lipgloss.Style
+	AssistantText   lipgloss.Style
+	SystemInfo      lipgloss.Style
+	ErrorText       lipgloss.Style
+	StatusBar       lipgloss.Style
+	HelpText        lipgloss.Style
+	BorderBox       lipgloss.Style
+	ActivityLabel   lipgloss.Style
+	ToolCardSuccess lipgloss.Style
+	ToolCardError   lipgloss.Style
+	ToolCardRunning lipgloss.Style
+	ToolCardOutput  lipgloss.Style
 }
 
 func NewStyles(t Theme) Styles {
@@ -95,6 +99,16 @@ func NewStyles(t Theme) Styles {
 		ActivityLabel: lipgloss.NewStyle().
 			Bold(true).
 			Foreground(t.Secondary),
+		ToolCardSuccess: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(t.Success),
+		ToolCardError: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(t.Error),
+		ToolCardRunning: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(t.Accent),
+		ToolCardOutput: lipgloss.NewStyle().
+			Foreground(t.Muted),
 	}
 }
-

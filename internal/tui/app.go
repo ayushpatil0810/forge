@@ -18,6 +18,42 @@ type sessionClosedMsg struct{}
 type renderTickMsg struct{}
 type resetCtrlCMsg struct{}
 
+type messageItem interface {
+	render(width int, expanded bool, styles Styles) string
+}
+
+type userMessage struct {
+	text string
+}
+
+func (u userMessage) render(_ int, _ bool, styles Styles) string {
+	return styles.UserPrompt.Render("❯ " + u.text)
+}
+
+type assistantMessage struct {
+	rendered string
+}
+
+func (a assistantMessage) render(_ int, _ bool, _ Styles) string {
+	return a.rendered
+}
+
+type toolMessage struct {
+	card *ToolCard
+}
+
+func (t toolMessage) render(width int, expanded bool, styles Styles) string {
+	return t.card.Render(width, expanded, styles)
+}
+
+type errorMessage struct {
+	text string
+}
+
+func (e errorMessage) render(_ int, _ bool, styles Styles) string {
+	return styles.ErrorText.Render(e.text)
+}
+
 // Model is the Bubble Tea TUI state.
 type Model struct {
 	session  agent.Session
@@ -33,13 +69,18 @@ type Model struct {
 	height int
 	ready  bool
 
-	messages        []string
+	items           []messageItem
+	toolCards       map[string]*ToolCard
+	toolsExpanded   bool
 	currentResponse string
 	activityLabel   string
 	isStreaming     bool
 	renderPending   bool
 	inputTokens     int
 	outputTokens    int
+	cost            float64
+	providerName    string
+	modelName       string
 
 	ctrlCPressed bool
 }
@@ -67,8 +108,14 @@ func New(s agent.Session, theme Theme) Model {
 		textarea:      ta,
 		spinner:       sp,
 		activityLabel: "Ready",
+		toolCards:     make(map[string]*ToolCard),
 	}
 	return m
+}
+
+func (m *Model) SetProviderInfo(provider, model string) {
+	m.providerName = provider
+	m.modelName = model
 }
 
 func (m Model) Init() tea.Cmd {
@@ -113,7 +160,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if !m.ready {
 			m.viewport = viewport.New(msg.Width, viewportHeight)
-			m.viewport.SetContent(strings.Join(m.messages, "\n\n"))
 			m.ready = true
 		} else {
 			m.viewport.Width = msg.Width
@@ -139,6 +185,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}))
 			return m, tea.Batch(cmds...)
 
+		case tea.KeyCtrlO:
+			m.toolsExpanded = !m.toolsExpanded
+			m.updateViewportContent()
+			return m, nil
+
 		case tea.KeyEsc:
 			if m.isStreaming {
 				m.session.Cancel()
@@ -146,7 +197,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activityLabel = "Interrupted"
 				if m.currentResponse != "" {
 					rendered, _ := m.renderer.Render(m.currentResponse + "\n\n*[Interrupted]*")
-					m.messages = append(m.messages, rendered)
+					m.items = append(m.items, assistantMessage{rendered: rendered})
 					m.currentResponse = ""
 					m.updateViewportContent()
 				}
@@ -154,7 +205,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeyEnter:
-			// Alt+Enter or Shift+Enter inserts newline; Enter sends
 			if msg.Alt {
 				m.textarea.InsertString("\n")
 				return m, nil
@@ -165,8 +215,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			userBlock := m.styles.UserPrompt.Render("❯ " + input)
-			m.messages = append(m.messages, userBlock)
+			m.items = append(m.items, userMessage{text: input})
 			m.textarea.Reset()
 			m.isStreaming = true
 			m.activityLabel = "Thinking..."
@@ -175,7 +224,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			if err := m.session.Send(context.Background(), input); err != nil {
 				m.isStreaming = false
-				m.messages = append(m.messages, m.styles.ErrorText.Render("Send error: "+err.Error()))
+				m.items = append(m.items, errorMessage{text: "Send error: " + err.Error()})
 				m.updateViewportContent()
 			}
 			return m, nil
@@ -210,10 +259,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.isStreaming = true
 			m.activityLabel = "Thinking..."
 
+		case agent.EventToolStarted:
+			if ev.ToolStart != nil {
+				m.isStreaming = true
+				// If we had buffered assistant response text, commit it before tool card
+				if m.currentResponse != "" {
+					rendered, _ := m.renderer.Render(m.currentResponse)
+					m.items = append(m.items, assistantMessage{rendered: rendered})
+					m.currentResponse = ""
+				}
+				tc := NewToolCard(ev.ToolStart.ID, ev.ToolStart.Name, ev.ToolStart.Input)
+				m.toolCards[tc.ID] = tc
+				m.items = append(m.items, toolMessage{card: tc})
+				m.activityLabel = fmt.Sprintf("Running %s...", tc.Name)
+				m.updateViewportContent()
+			}
+
+		case agent.EventToolOutputDelta:
+			if ev.ToolOut != nil {
+				if tc, ok := m.toolCards[ev.ToolOut.ID]; ok {
+					tc.Output += ev.ToolOut.Chunk
+					m.updateViewportContent()
+				}
+			}
+
+		case agent.EventToolFinished:
+			if ev.ToolDone != nil {
+				if tc, ok := m.toolCards[ev.ToolDone.ID]; ok {
+					tc.Status = ev.ToolDone.Status
+					tc.DurationMs = ev.ToolDone.DurationMs
+					if ev.ToolDone.Result != "" {
+						tc.Output = ev.ToolDone.Result
+					}
+					if ev.ToolDone.Error != "" {
+						tc.Output = ev.ToolDone.Error
+					}
+					m.activityLabel = "Thinking..."
+					m.updateViewportContent()
+				}
+			}
+
 		case agent.EventUsageUpdated:
 			if ev.Usage != nil {
 				m.inputTokens = ev.Usage.InputTokens
 				m.outputTokens = ev.Usage.OutputTokens
+				m.cost = ev.Usage.Cost
 			}
 
 		case agent.EventDone:
@@ -224,7 +314,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.currentResponse += "\n\n*[Interrupted]*"
 				}
 				rendered, _ := m.renderer.Render(m.currentResponse)
-				m.messages = append(m.messages, rendered)
+				m.items = append(m.items, assistantMessage{rendered: rendered})
 				m.currentResponse = ""
 			}
 			m.updateViewportContent()
@@ -236,7 +326,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if ev.Err != nil {
 				errMsg = ev.Err.Message
 			}
-			m.messages = append(m.messages, m.styles.ErrorText.Render("Error: "+errMsg))
+			m.items = append(m.items, errorMessage{text: "Error: " + errMsg})
 			m.updateViewportContent()
 		}
 		// Continue listening for next session event
@@ -255,12 +345,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) updateViewportContent() {
+	renderWidth := m.width
+	if renderWidth <= 0 {
+		renderWidth = 80
+	}
+
 	var fullText strings.Builder
-	for i, msg := range m.messages {
+	for i, item := range m.items {
 		if i > 0 {
 			fullText.WriteString("\n\n")
 		}
-		fullText.WriteString(msg)
+		fullText.WriteString(item.render(renderWidth, m.toolsExpanded, m.styles))
 	}
 
 	if m.currentResponse != "" {
@@ -284,15 +379,33 @@ func (m Model) View() string {
 	}
 
 	var status string
+	providerInfo := ""
+	if m.providerName != "" {
+		if m.modelName != "" {
+			providerInfo = fmt.Sprintf("[%s/%s] ", m.providerName, m.modelName)
+		} else {
+			providerInfo = fmt.Sprintf("[%s] ", m.providerName)
+		}
+	}
+
+	costInfo := ""
+	if m.cost > 0 {
+		costInfo = fmt.Sprintf(" ($%.4f)", m.cost)
+	}
+
 	if m.isStreaming {
-		status = fmt.Sprintf("%s %s", m.spinner.View(), m.activityLabel)
+		status = fmt.Sprintf("%s%s %s", providerInfo, m.spinner.View(), m.activityLabel)
 	} else if m.ctrlCPressed {
 		status = m.styles.ErrorText.Render("Press Ctrl+C again to quit")
 	} else {
-		status = m.styles.StatusBar.Render(fmt.Sprintf("%s · tokens: %d in / %d out", m.activityLabel, m.inputTokens, m.outputTokens))
+		status = m.styles.StatusBar.Render(fmt.Sprintf("%s%s · tokens: %d in / %d out%s", providerInfo, m.activityLabel, m.inputTokens, m.outputTokens, costInfo))
 	}
 
-	help := m.styles.HelpText.Render("Enter: send · Alt+Enter: newline · Esc: cancel · Ctrl+C: quit")
+	toolToggle := "Ctrl+O: expand tools"
+	if m.toolsExpanded {
+		toolToggle = "Ctrl+O: collapse tools"
+	}
+	help := m.styles.HelpText.Render(fmt.Sprintf("Enter: send · Alt+Enter: newline · Esc: cancel · %s · Ctrl+C: quit", toolToggle))
 
 	return fmt.Sprintf(
 		"%s\n%s\n%s\n%s",

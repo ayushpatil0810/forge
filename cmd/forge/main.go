@@ -61,20 +61,30 @@ func runForge(ctx context.Context, prompt string) error {
 	}
 
 	var provider llm.Provider
+	var providerName, modelName string
 	if demoFlag {
+		providerName = "mock"
+		modelName = "demo"
 		provider = mock.New(
 			mock.Turn{
-				mock.Text("Let me look at go.mod first.\n"),
-				mock.ToolUse("demo1", "read_file", map[string]any{"path": "go.mod"}),
+				mock.Text("Let me inspect the workspace directory structure first.\n"),
+				mock.ToolUse("demo1", "list_dir", map[string]any{"path": "."}),
 			},
 			mock.Turn{
-				mock.Text("That's a Go module. The engine loop works end to end.\n"),
+				mock.Text("Now searching for Go entry points...\n"),
+				mock.ToolUse("demo2", "grep", map[string]any{"query": "func main"}),
 			},
 			mock.Turn{
-				mock.Text("Here is an example code block:\n\n```go\npackage main\n\nfunc main() {\n    println(\"Hello from Forge!\")\n}\n```\n"),
+				mock.Text("Reading module configuration file `go.mod`:\n"),
+				mock.ToolUse("demo3", "read_file", map[string]any{"path": "go.mod", "limit": 10}),
+			},
+			mock.Turn{
+				mock.Text("I have explored your workspace! Here is what I discovered:\n\n- Directory contents retrieved using `list_dir`.\n- Located application entrypoints using `grep`.\n- Inspected module dependencies with `read_file`.\n\nPress **Ctrl+O** to toggle between collapsed and expanded tool call cards!"),
 			},
 		)
 	} else {
+		providerName = "anthropic"
+		modelName = cfg.Model
 		anthropicProvider, err := anthropic.New(anthropic.Config{
 			Model: cfg.Model,
 		})
@@ -84,17 +94,23 @@ func runForge(ctx context.Context, prompt string) error {
 		provider = anthropicProvider
 	}
 
+	systemPrompt := cfg.SystemPrompt
+	if systemPrompt == "" {
+		systemPrompt = agent.BuildSystemPrompt(cfg.WorkspaceRoot)
+	}
+
 	s := agent.NewLocal(agent.Config{
 		Provider: provider,
-		Tools:    tools.NewRegistry(tools.ReadFile{Root: cfg.WorkspaceRoot}),
+		Tools:    tools.DefaultTools(cfg.WorkspaceRoot),
 		Policy:   permission.Policy{Mode: permission.ModeDefault},
-		System:   cfg.SystemPrompt,
+		System:   systemPrompt,
 	})
 	defer s.Close()
 
 	// If no prompt is provided, start the interactive Bubble Tea TUI
 	if strings.TrimSpace(prompt) == "" {
 		m := tui.New(s, tui.AdaptiveTheme())
+		m.SetProviderInfo(providerName, modelName)
 		p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 		if _, err := p.Run(); err != nil {
 			return fmt.Errorf("running TUI: %w", err)
