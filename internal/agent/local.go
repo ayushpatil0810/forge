@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ayushpatil0810/forge/internal/llm"
+	"github.com/ayushpatil0810/forge/internal/llm/retry"
 	"github.com/ayushpatil0810/forge/internal/permission"
 	"github.com/ayushpatil0810/forge/internal/tools"
 )
@@ -168,7 +169,16 @@ func (s *local) loop(ctx context.Context, prompt string) Event {
 			return Event{Type: EventDone, Done: &DonePayload{Reason: "cancelled"}}
 		}
 		if err != nil {
-			return Event{Type: EventError, Err: &ErrorPayload{Code: "provider_error", Message: err.Error(), Retryable: true}}
+			code, guidance := ClassifyError(err)
+			return Event{
+				Type: EventError,
+				Err: &ErrorPayload{
+					Code:      code,
+					Message:   RedactSecrets(err.Error()),
+					Guidance:  guidance,
+					Retryable: code == ErrCodeRateLimit || code == ErrCodeNetwork,
+				},
+			}
 		}
 		s.history = append(s.history, msg)
 		if len(msg.ToolCalls) == 0 {
@@ -191,7 +201,8 @@ func (s *local) loop(ctx context.Context, prompt string) Event {
 					Type: EventError,
 					Err: &ErrorPayload{
 						Code:      "runaway_loop",
-						Message:   fmt.Sprintf("detected runaway loop: %d consecutive identical calls (%s)", consecutiveRepeats, currentSig),
+						Message:   fmt.Sprintf("detected runaway loop: %d consecutive identical calls (%s)", consecutiveRepeats, RedactSecrets(currentSig)),
+						Guidance:  "Agent loop guard interrupted execution to prevent excessive API costs.",
 						Retryable: false,
 					},
 				}
@@ -221,6 +232,7 @@ func (s *local) loop(ctx context.Context, prompt string) Event {
 						Err: &ErrorPayload{
 							Code:      "fix_loop_stalled",
 							Message:   fmt.Sprintf("detected stalled fix loop: command %q failed 3 times with identical file edits", bArgs.Command),
+							Guidance:  "The fix loop stalled because repeated attempts failed to fix the error. Review the test failure and code manually.",
 							Retryable: false,
 						},
 					}
@@ -239,13 +251,30 @@ func (s *local) loop(ctx context.Context, prompt string) Event {
 		Err: &ErrorPayload{
 			Code:      "max_turns",
 			Message:   fmt.Sprintf("stopped after %d model calls (MaxTurns)", s.cfg.MaxTurns),
+			Guidance:  "Reached maximum conversation turns limit. Adjust max_turns in configuration if more turns are needed.",
 			Retryable: false,
 		},
 	}
 }
 
 func (s *local) streamModel(ctx context.Context) (llm.Message, error) {
-	ch, err := s.cfg.Provider.Stream(ctx, llm.Request{
+	retryCtx := retry.ContextWithOnRetry(ctx, func(attempt, maxAttempts int, delay time.Duration, err error) {
+		redactedErr := ""
+		if err != nil {
+			redactedErr = RedactSecrets(err.Error())
+		}
+		s.emit(Event{
+			Type: EventRetryScheduled,
+			Retry: &RetryScheduledPayload{
+				Attempt:     attempt,
+				MaxAttempts: maxAttempts,
+				DelayMs:     delay.Milliseconds(),
+				Error:       redactedErr,
+			},
+		})
+	})
+
+	ch, err := s.cfg.Provider.Stream(retryCtx, llm.Request{
 		System:    s.cfg.System,
 		Messages:  s.history,
 		Tools:     s.cfg.Tools.Specs(),

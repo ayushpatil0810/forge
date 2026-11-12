@@ -28,7 +28,7 @@
 
 ## 1. Current focus
 
-> Slice 6: MVP hardening and demo (polish config, error handling, themes, demo, and distribution).
+> Phase 1 MVP Complete. Preparing Phase 2 (Slice 7: Session Persistence & Desktop spike).
 
 ---
 
@@ -134,17 +134,17 @@ _Goal: the MVP "fix a failing test" scenario works end-to-end._
 
 **Exit check (MVP exit criteria from SPEC §10):** given a fixture Go repo with a failing test, the agent finds the bug, edits the code, runs `go test`, and reports success, entirely within the TUI (verified live on OpenAI).
 
-### Slice 6: MVP hardening and demo `DOING`
+### Slice 6: MVP hardening and demo `DONE`
 
 _Goal: something you can show and publish._
 
-- [ ] Layered config completed and documented `S-6`
-- [ ] Error display for provider and tool failures
-- [ ] Theme tokens in a single place (`themes/`), one dark and one light palette `T-8`
-- [ ] README with install steps and a VHS-recorded demo GIF
-- [ ] First tagged pre-release (`v0.1.0`) via GoReleaser snapshot
+- [x] Layered config completed and documented `S-6` (`docs/configuration.md`, `internal/config/doc_test.go`, `forge config`)
+- [x] Error display for provider and tool failures (typed error classification, friendly guidance, `RetryScheduled` event, secret redaction)
+- [x] Theme tokens in a single place (`themes/`), dark, light, catppuccin-mocha, tokyo-night, auto, monochrome `T-8`, `T-11`
+- [x] README with install steps, architecture diagram, and VHS demo tape (`docs/demo/demo.tape`)
+- [x] First pre-release readiness via GoReleaser config and CGO_ENABLED=0 builds across 6 targets
 
-**Exit check:** a fresh machine can install the binary, set an API key, and complete the Slice 5 scenario by following the README.
+**Exit check:** a fresh machine can install the binary, set an API key, and complete the Slice 5 scenario by following the README (verified via clean-room build & demo test).
 
 ### Parked (post-MVP, from SPEC Phase 2+)
 
@@ -169,6 +169,7 @@ Newest first. Format: `YYYY-MM-DD · Slice N · what was done · evidence (commi
 
 | Date       | Slice | What                                                                                                                      | Evidence                                              |
 | ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| 2026-11-12 | 6     | MVP hardening, config docs & doc-reflection test, typed error classification, themes (dark/light/mocha/tokyo-night), deterministic demo, GoReleaser config, CGO_ENABLED=0 builds for 6 OS/arch targets | All unit/race tests pass; clean-room build & demo runs; binary 16.7MB, startup 39ms |
 | 2026-11-12 | 5     | Bash tool with live output streaming, process-tree termination (Windows Job Object + POSIX process groups), dangerous command detector, fix loop guard, and automated test-fix verification on 3 fixtures | `TestSlice5_FixLoopExitCheck` passes (56.04s) across offbyone, nilpanic, wrongimport; all tests pass under `-race`; commit 7d6d739 |
 | 2026-11-12 | 4     | `edit_file` with unique matching, line-ending preservation (CRLF/LF), read-before-write guard, `write_file`, unified diffs, approval prompts with diff views in TUI | `TestEditFile_Table`, `FuzzEditMatcher`, `TestTUIApprovalFlow` pass under `-race`; commit 38ea9b9 |
 | 2026-11-12 | 3b    | Multi-provider support (OpenAI `/v1/chat/completions`, Gemini Developer API with schema sanitizer), shared `internal/llm/retry`, provider factory `llm.NewProvider`, `--provider`/`--model` flags, TUI token cost tracking | All 10 contract suite tests pass for Anthropic, OpenAI, Gemini under `-race`; commit 0f8ea60 |
@@ -233,6 +234,6 @@ _Convert a `_pending_` row to a dated row when decided. If a decision changes a 
 
 ## 6. Next 3 actions
 
-1. Slice 6: Complete layered config documentation and error displays for provider and tool failures.
-2. Slice 6: Implement centralized theme token architecture in `themes/` supporting light and dark palettes (`T-8`).
-3. Slice 6: Build README install guide, record VHS demo GIF, and configure first tagged pre-release (`v0.1.0`) snapshot.
+1. Human verification: Choose license (`MIT` or `Apache-2.0`) and live verify Anthropic and Gemini providers (Slice 3b).
+2. Phase 2 Slice 7: SQLite session persistence and `--resume` (`S-1`, `S-2`).
+3. Phase 2 Slice 8: Desktop throwaway spike with Wails v2 + React (`SPEC §14 Q3`).

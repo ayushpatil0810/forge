@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +25,8 @@ import (
 
 var (
 	version = "0.1.0-dev"
+	commit  = "none"
+	date    = "unknown"
 
 	rootFlag     string
 	demoFlag     bool
@@ -32,6 +35,7 @@ var (
 	providerFlag string
 	modelFlag    string
 	shellFlag    string
+	themeFlag    string
 )
 
 func newRootCmd() *cobra.Command {
@@ -47,16 +51,47 @@ func newRootCmd() *cobra.Command {
 		},
 	}
 
-	cmd.SetVersionTemplate("forge {{.Version}}\n")
-	cmd.Flags().StringVar(&rootFlag, "root", ".", "workspace root directory")
-	cmd.Flags().BoolVar(&demoFlag, "demo", false, "use a scripted mock provider (no API key needed)")
-	cmd.Flags().BoolVar(&yesFlag, "yes", false, "auto-approve file edits and ordinary commands in headless mode")
-	cmd.Flags().BoolVar(&yoloFlag, "yolo", false, "run in YOLO mode (auto-approve all actions, including dangerous commands)")
-	cmd.Flags().StringVar(&providerFlag, "provider", "", "LLM provider: anthropic, openai, gemini, mock (overrides config)")
-	cmd.Flags().StringVar(&modelFlag, "model", "", "model ID to use (overrides config)")
-	cmd.Flags().StringVar(&shellFlag, "shell", "", "shell to use for command execution (e.g. pwsh, powershell.exe, bash)")
+	cmd.SetVersionTemplate(fmt.Sprintf("forge {{.Version}} (commit: %s, date: %s)\n", commit, date))
+	cmd.PersistentFlags().StringVar(&rootFlag, "root", ".", "workspace root directory")
+	cmd.PersistentFlags().BoolVar(&demoFlag, "demo", false, "use a scripted mock provider (no API key needed)")
+	cmd.PersistentFlags().BoolVar(&yesFlag, "yes", false, "auto-approve file edits and ordinary commands in headless mode")
+	cmd.PersistentFlags().BoolVar(&yoloFlag, "yolo", false, "run in YOLO mode (auto-approve all actions, including dangerous commands)")
+	cmd.PersistentFlags().StringVar(&providerFlag, "provider", "", "LLM provider: anthropic, openai, gemini, mock (overrides config)")
+	cmd.PersistentFlags().StringVar(&modelFlag, "model", "", "model ID to use (overrides config)")
+	cmd.PersistentFlags().StringVar(&shellFlag, "shell", "", "shell to use for command execution (e.g. pwsh, powershell.exe, bash)")
+	cmd.PersistentFlags().StringVar(&themeFlag, "theme", "", "color theme: dark, light, catppuccin-mocha, tokyo-night, auto, monochrome")
+
+	cmd.AddCommand(newConfigCmd())
 
 	return cmd
+}
+
+func newConfigCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "config",
+		Short: "Print the effective configuration with secrets redacted",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load(config.LoadOptions{
+				WorkspaceRoot: rootFlag,
+				Provider:      providerFlag,
+				Model:         modelFlag,
+				Shell:         shellFlag,
+				Theme:         themeFlag,
+			})
+			if err != nil {
+				return err
+			}
+			for _, w := range cfg.Warnings {
+				cmd.PrintErrf("Warning: %s\n", w)
+			}
+			data, err := json.MarshalIndent(cfg.Redacted(), "", "  ")
+			if err != nil {
+				return err
+			}
+			cmd.Println(string(data))
+			return nil
+		},
+	}
 }
 
 func decideHeadlessApproval(isDangerous, yes, yolo bool) (agent.Decision, string) {
@@ -72,44 +107,93 @@ func decideHeadlessApproval(isDangerous, yes, yolo bool) (agent.Decision, string
 	return agent.DecisionDeny, "approval requested in headless mode; use --yes to approve"
 }
 
+func setupDemoWorkspace() (string, error) {
+	dir, err := os.MkdirTemp("", "forge-demo-*")
+	if err != nil {
+		return "", err
+	}
+	goMod := "module example.com/demo\n\ngo 1.22\n"
+	code := `package demo
+
+// CalculateDiscount returns the discount percentage for a given order amount.
+func CalculateDiscount(amount float64) float64 {
+	if amount > 100 {
+		return 0.15
+	}
+	return 0.0
+}
+`
+	test := `package demo
+
+import "testing"
+
+func TestDiscount(t *testing.T) {
+	// Orders >= $100 should receive a 15% discount
+	if d := CalculateDiscount(100.0); d != 0.15 {
+		t.Fatalf("expected 15%% discount for orders >= 100, got %.0f%%", d*100)
+	}
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0644); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "discount.go"), []byte(code), 0644); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "discount_test.go"), []byte(test), 0644); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
 func runForge(ctx context.Context, prompt string) error {
 	cfg, err := config.Load(config.LoadOptions{
 		WorkspaceRoot: rootFlag,
 		Provider:      providerFlag,
 		Model:         modelFlag,
 		Shell:         shellFlag,
+		Theme:         themeFlag,
 	})
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
+	}
+	for _, w := range cfg.Warnings {
+		fmt.Fprintf(os.Stderr, "Warning: %s\n", w)
 	}
 
 	var provider llm.Provider
 	var providerName, modelName string
 
 	if demoFlag {
+		demoDir, err := setupDemoWorkspace()
+		if err == nil && rootFlag == "." {
+			cfg.WorkspaceRoot = demoDir
+		}
 		providerName = "mock"
 		modelName = "demo"
-		sampleFile := "go.mod"
-		if _, err := os.Stat(filepath.Join(cfg.WorkspaceRoot, "go.mod")); err != nil {
-			if _, err := os.Stat(filepath.Join(cfg.WorkspaceRoot, "main.go")); err == nil {
-				sampleFile = "main.go"
-			}
-		}
 		provider = mock.New(
 			mock.Turn{
-				mock.Text("Let me inspect the workspace directory structure first.\n"),
-				mock.ToolUse("demo1", "list_dir", map[string]any{"path": "."}),
+				mock.Text("I will inspect the failing tests in this repository using `bash`.\n"),
+				mock.ToolUse("demo1", "bash", map[string]any{"command": "go test ./..."}),
 			},
 			mock.Turn{
-				mock.Text("Now searching for Go entry points...\n"),
-				mock.ToolUse("demo2", "grep", map[string]any{"query": "func main"}),
+				mock.Text("The test failed: `TestDiscount` expected 15% discount for orders >= 100. Let me read `discount.go`.\n"),
+				mock.ToolUse("demo2", "read_file", map[string]any{"path": "discount.go"}),
 			},
 			mock.Turn{
-				mock.Text(fmt.Sprintf("Reading project configuration file `%s`:\n", sampleFile)),
-				mock.ToolUse("demo3", "read_file", map[string]any{"path": sampleFile, "limit": 10}),
+				mock.Text("The logic currently uses `amount > 100`, excluding orders of exactly 100. Let me fix the boundary condition.\n"),
+				mock.ToolUse("demo3", "edit_file", map[string]any{
+					"path":       "discount.go",
+					"old_string": "if amount > 100 {",
+					"new_string": "if amount >= 100 {",
+				}),
 			},
 			mock.Turn{
-				mock.Text("I have explored your workspace! Here is what I discovered:\n\n- Directory contents retrieved using `list_dir`.\n- Located application entrypoints using `grep`.\n- Inspected module dependencies with `read_file`.\n\nPress **Ctrl+O** to toggle between collapsed and expanded tool call cards!"),
+				mock.Text("The code has been corrected. Re-running the test suite to verify.\n"),
+				mock.ToolUse("demo4", "bash", map[string]any{"command": "go test -v ./..."}),
+			},
+			mock.Turn{
+				mock.Text("All tests are passing! I have fixed the boundary condition in `discount.go` so that orders of exactly 100 receive the intended 15% discount."),
 			},
 		)
 	} else {
@@ -151,8 +235,15 @@ func runForge(ctx context.Context, prompt string) error {
 
 	// If no prompt is provided, start the interactive Bubble Tea TUI
 	if strings.TrimSpace(prompt) == "" {
-		m := tui.New(s, tui.AdaptiveTheme())
+		th, err := tui.LoadTheme(cfg.Theme)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: %v (falling back to dark)\n", err)
+			th = tui.DarkTheme()
+		}
+		m := tui.New(s, th)
 		m.SetProviderInfo(providerName, modelName)
+		m.SetVersion(version)
+		m.SetGitBranch(tui.DetectGitBranch(cfg.WorkspaceRoot))
 		p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 		if _, err := p.Run(); err != nil {
 			return fmt.Errorf("running TUI: %w", err)

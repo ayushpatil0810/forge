@@ -55,6 +55,26 @@ func (e errorMessage) render(_ int, _ bool, styles Styles) string {
 	return styles.ErrorText.Render(e.text)
 }
 
+type errorCard struct {
+	code     string
+	message  string
+	guidance string
+}
+
+func (e errorCard) render(width int, _ bool, styles Styles) string {
+	boxWidth := width - 4
+	if boxWidth < 40 {
+		boxWidth = 40
+	}
+	title := styles.ToolCardError.Bold(true).Render(fmt.Sprintf("✕ ERROR [%s]", e.code))
+	msg := styles.ErrorText.Render(e.message)
+	content := title + "\n" + msg
+	if e.guidance != "" {
+		content += "\n\n" + styles.SystemInfo.Render("💡 How to fix: "+e.guidance)
+	}
+	return styles.ToolCardError.Width(boxWidth).Padding(0, 1).Render(content)
+}
+
 // Model is the Bubble Tea TUI state.
 type Model struct {
 	session  agent.Session
@@ -82,6 +102,8 @@ type Model struct {
 	cost            float64
 	providerName    string
 	modelName       string
+	version         string
+	branch          string
 
 	pendingApproval  *agent.ApprovalRequestedPayload
 	showApprovalDiff bool
@@ -119,6 +141,16 @@ func New(s agent.Session, theme Theme) Model {
 func (m *Model) SetProviderInfo(provider, model string) {
 	m.providerName = provider
 	m.modelName = model
+}
+
+func (m *Model) SetVersion(v string) {
+	m.version = v
+	m.updateViewportContent()
+}
+
+func (m *Model) SetGitBranch(b string) {
+	m.branch = b
+	m.updateViewportContent()
 }
 
 func (m *Model) cyclePermissionMode() {
@@ -410,16 +442,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.updateViewportContent()
 
+		case agent.EventRetryScheduled:
+			if ev.Retry != nil {
+				m.activityLabel = fmt.Sprintf("Retrying in %dms (attempt %d/%d)...", ev.Retry.DelayMs, ev.Retry.Attempt, ev.Retry.MaxAttempts)
+				m.updateViewportContent()
+			}
+
 		case agent.EventError:
 			m.isStreaming = false
 			m.pendingApproval = nil
 			m.textarea.Focus()
 			m.activityLabel = "Error"
+			code := "error"
 			errMsg := "unknown error"
+			guidance := ""
 			if ev.Err != nil {
+				code = ev.Err.Code
 				errMsg = ev.Err.Message
+				guidance = ev.Err.Guidance
 			}
-			m.items = append(m.items, errorMessage{text: "Error: " + errMsg})
+			m.items = append(m.items, errorCard{code: code, message: errMsg, guidance: guidance})
 			m.updateViewportContent()
 		}
 		// Continue listening for next session event
@@ -437,10 +479,66 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+func renderWelcomeBanner(width int, version, provider, model, mode, branch string, styles Styles) string {
+	boxWidth := width - 4
+	if boxWidth < 36 {
+		boxWidth = 36
+	}
+
+	var title string
+	if width >= 70 {
+		banner := "   ___                            \n" +
+			"  / __\\___  _ __ __ _  ___        \n" +
+			" / _\\/ _ \\| '__/ _` |/ _ \\       \n" +
+			"/ / | (_) | | | (_| |  __/       \n" +
+			"\\/   \\___/|_|  \\__, |\\___|       \n" +
+			"               |___/              "
+		title = styles.UserPrompt.Bold(true).Render(banner)
+	} else {
+		title = styles.UserPrompt.Bold(true).Render("🔨 FORGE")
+	}
+
+	if version != "" {
+		title += " " + styles.SystemInfo.Render("v"+version)
+	}
+
+	if provider == "" {
+		provider = "anthropic"
+	}
+	if model == "" {
+		model = "claude-sonnet-5-5"
+	}
+
+	var details []string
+	details = append(details, fmt.Sprintf("• Provider: %s", styles.AssistantText.Bold(true).Render(provider)))
+	details = append(details, fmt.Sprintf("• Model:    %s", styles.AssistantText.Bold(true).Render(model)))
+	details = append(details, fmt.Sprintf("• Mode:     %s", styles.AssistantText.Bold(true).Render(mode)))
+	if branch != "" {
+		details = append(details, fmt.Sprintf("• Branch:   %s", styles.AssistantText.Bold(true).Render("🌿 "+branch)))
+	}
+
+	tips := fmt.Sprintf(
+		"\n%s  %s  %s",
+		styles.SystemInfo.Render("Tab: mode"),
+		styles.SystemInfo.Render("Ctrl+O: tools"),
+		styles.SystemInfo.Render("Ctrl+C: quit"),
+	)
+
+	body := title + "\n\n" + strings.Join(details, "\n") + "\n" + tips
+	return styles.BorderBox.Width(boxWidth).Padding(0, 1).Render(body)
+}
+
 func (m *Model) updateViewportContent() {
 	renderWidth := m.width
 	if renderWidth <= 0 {
 		renderWidth = 80
+	}
+
+	if len(m.items) == 0 && m.currentResponse == "" && m.pendingApproval == nil {
+		modeStr := string(m.session.Mode())
+		banner := renderWelcomeBanner(renderWidth, m.version, m.providerName, m.modelName, modeStr, m.branch, m.styles)
+		m.viewport.SetContent(banner)
+		return
 	}
 
 	var fullText strings.Builder
@@ -502,12 +600,30 @@ func (m Model) View() string {
 		modeInfo = fmt.Sprintf("[%s] ", m.session.Mode())
 	}
 
+	branchInfo := ""
+	if m.branch != "" && m.width >= 80 {
+		branchInfo = fmt.Sprintf("🌿 %s · ", m.branch)
+	}
+
 	if m.isStreaming {
-		status = fmt.Sprintf("%s%s%s %s", modeInfo, providerInfo, m.spinner.View(), m.activityLabel)
+		status = fmt.Sprintf("%s%s%s%s %s", modeInfo, providerInfo, branchInfo, m.spinner.View(), m.activityLabel)
 	} else if m.ctrlCPressed {
 		status = m.styles.ErrorText.Render("Press Ctrl+C again to quit")
 	} else {
-		status = m.styles.StatusBar.Render(fmt.Sprintf("%s%s%s · tokens: %d in / %d out%s", modeInfo, providerInfo, m.activityLabel, m.inputTokens, m.outputTokens, costInfo))
+		if m.width < 70 {
+			status = m.styles.StatusBar.Render(fmt.Sprintf("%s%s · %d/%d%s", modeInfo, m.modelName, m.inputTokens, m.outputTokens, costInfo))
+		} else {
+			status = m.styles.StatusBar.Render(fmt.Sprintf("%s%s%s%s · tokens: %d in / %d out%s", modeInfo, providerInfo, branchInfo, m.activityLabel, m.inputTokens, m.outputTokens, costInfo))
+		}
+	}
+
+	if m.height < 20 {
+		return fmt.Sprintf(
+			"%s\n%s\n%s",
+			m.viewport.View(),
+			status,
+			m.textarea.View(),
+		)
 	}
 
 	toolToggle := "Ctrl+O: expand tools"

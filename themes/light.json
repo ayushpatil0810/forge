@@ -1,0 +1,15 @@
+{
+  "name": "light",
+  "is_dark": false,
+  "background": "#ffffff",
+  "foreground": "#1a1a2e",
+  "primary": "#0052cc",
+  "secondary": "#5e35b1",
+  "accent": "#d81b60",
+  "muted": "#495057",
+  "error": "#c92a2a",
+  "success": "#2b8a3e",
+  "warning": "#b03800",
+  "border": "#ced4da",
+  "glamour_style": "light"
+}

@@ -11,6 +11,7 @@ const (
 	EventApprovalRequested EventType = "ApprovalRequested"
 	EventCheckpointCreated EventType = "CheckpointCreated"
 	EventUsageUpdated      EventType = "UsageUpdated"
+	EventRetryScheduled    EventType = "RetryScheduled"
 	EventError             EventType = "Error"
 	EventDone              EventType = "Done"
 )
@@ -83,7 +84,15 @@ type UsageUpdatedPayload struct {
 type ErrorPayload struct {
 	Code      string `json:"code"`
 	Message   string `json:"message"`
+	Guidance  string `json:"guidance,omitempty"`
 	Retryable bool   `json:"retryable"`
+}
+
+type RetryScheduledPayload struct {
+	Attempt     int    `json:"attempt"`
+	MaxAttempts int    `json:"maxAttempts"`
+	DelayMs     int64  `json:"delayMs"`
+	Error       string `json:"error,omitempty"`
 }
 
 type DonePayload struct {
@@ -92,18 +101,19 @@ type DonePayload struct {
 
 // Event is the single, flat, JSON-friendly envelope frontends consume (SPEC §6.4).
 type Event struct {
-	Seq       int64                     `json:"seq"`
-	Type      EventType                 `json:"type"`
-	Token     *TokenDeltaPayload        `json:"token,omitempty"`
-	Thinking  *ThinkingDeltaPayload     `json:"thinking,omitempty"`
-	ToolStart *ToolStartedPayload       `json:"toolStart,omitempty"`
-	ToolOut   *ToolOutputDeltaPayload   `json:"toolOut,omitempty"`
-	ToolDone  *ToolFinishedPayload      `json:"toolDone,omitempty"`
+	Seq       int64                  `json:"seq"`
+	Type      EventType              `json:"type"`
+	Token     *TokenDeltaPayload     `json:"token,omitempty"`
+	Thinking  *ThinkingDeltaPayload  `json:"thinking,omitempty"`
+	ToolStart *ToolStartedPayload    `json:"toolStart,omitempty"`
+	ToolOut   *ToolOutputDeltaPayload `json:"toolOut,omitempty"`
+	ToolDone  *ToolFinishedPayload   `json:"toolDone,omitempty"`
 	Approval  *ApprovalRequestedPayload `json:"approval,omitempty"`
 	Checkpt   *CheckpointCreatedPayload `json:"checkpt,omitempty"`
-	Usage     *UsageUpdatedPayload      `json:"usage,omitempty"`
-	Err       *ErrorPayload             `json:"err,omitempty"`
-	Done      *DonePayload              `json:"done,omitempty"`
+	Usage     *UsageUpdatedPayload   `json:"usage,omitempty"`
+	Retry     *RetryScheduledPayload `json:"retry,omitempty"`
+	Err       *ErrorPayload          `json:"err,omitempty"`
+	Done      *DonePayload           `json:"done,omitempty"`
 }
 
 func (e Event) Terminal() bool {

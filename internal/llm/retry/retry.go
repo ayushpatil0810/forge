@@ -15,10 +15,28 @@ const (
 	DefaultMaxBackoff     = 5 * time.Second
 )
 
+type OnRetryFunc func(attempt, maxAttempts int, delay time.Duration, err error)
+
+type onRetryContextKey struct{}
+
+// ContextWithOnRetry returns a new context with the given retry callback.
+func ContextWithOnRetry(ctx context.Context, fn OnRetryFunc) context.Context {
+	return context.WithValue(ctx, onRetryContextKey{}, fn)
+}
+
+// OnRetryFromContext retrieves the OnRetryFunc from context if set.
+func OnRetryFromContext(ctx context.Context) OnRetryFunc {
+	if fn, ok := ctx.Value(onRetryContextKey{}).(OnRetryFunc); ok {
+		return fn
+	}
+	return nil
+}
+
 type Config struct {
 	MaxRetries     int
 	InitialBackoff time.Duration
 	MaxBackoff     time.Duration
+	OnRetry        OnRetryFunc
 }
 
 func DefaultConfig() Config {
@@ -100,6 +118,14 @@ func Do(ctx context.Context, cfg Config, op Operation) (*http.Response, error) {
 			}
 		} else if sleepDuration > cfg.MaxBackoff {
 			sleepDuration = cfg.MaxBackoff
+		}
+
+		onRetry := cfg.OnRetry
+		if onRetry == nil {
+			onRetry = OnRetryFromContext(ctx)
+		}
+		if onRetry != nil {
+			onRetry(attempt+1, cfg.MaxRetries, sleepDuration, err)
 		}
 
 		select {

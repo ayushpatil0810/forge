@@ -167,3 +167,130 @@ func TestTUIApprovalFlow(t *testing.T) {
 		t.Fatalf("expected approval prompt to clear after 'y', got:\n%s", afterY)
 	}
 }
+
+func TestTUIErrorCardRendering(t *testing.T) {
+	p := mock.New()
+	s := agent.NewLocal(agent.Config{Provider: p})
+	defer s.Close()
+
+	m := tui.New(s, tui.DarkTheme())
+	newM, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = newM.(tui.Model)
+
+	errEvent := agent.Event{
+		Type: agent.EventError,
+		Err: &agent.ErrorPayload{
+			Code:      "auth_failed",
+			Message:   "anthropic: ANTHROPIC_API_KEY environment variable is required",
+			Guidance:  "Set your API key in environment variables.",
+			Retryable: false,
+		},
+	}
+	newM, _ = m.Update(errEvent)
+	m = newM.(tui.Model)
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "ERROR [auth_failed]") {
+		t.Fatalf("expected error code header in view, got:\n%s", view)
+	}
+	if !strings.Contains(view, "ANTHROPIC_API_KEY environment variable is required") {
+		t.Fatalf("expected error message in view, got:\n%s", view)
+	}
+	if !strings.Contains(view, "Set your API key in environment variables") {
+		t.Fatalf("expected guidance text in view, got:\n%s", view)
+	}
+}
+
+func TestTUIRetryScheduledEvent(t *testing.T) {
+	p := mock.New()
+	s := agent.NewLocal(agent.Config{Provider: p})
+	defer s.Close()
+
+	m := tui.New(s, tui.DarkTheme())
+	newM, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = newM.(tui.Model)
+
+	retryEvent := agent.Event{
+		Type: agent.EventRetryScheduled,
+		Retry: &agent.RetryScheduledPayload{
+			Attempt:     2,
+			MaxAttempts: 3,
+			DelayMs:     1500,
+			Error:       "temporary network blip",
+		},
+	}
+	newM, _ = m.Update(retryEvent)
+	m = newM.(tui.Model)
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "Retrying in 1500ms (attempt 2/3)") {
+		t.Fatalf("expected retry status indicator in view, got:\n%s", view)
+	}
+}
+
+func TestTUIWelcomeBannerAndFooter(t *testing.T) {
+	p := mock.New()
+	s := agent.NewLocal(agent.Config{Provider: p})
+	defer s.Close()
+
+	m := tui.New(s, tui.DarkTheme())
+	m.SetProviderInfo("anthropic", "claude-sonnet-5-5")
+	m.SetVersion("0.1.0-test")
+	m.SetGitBranch("main")
+
+	newM, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+	m = newM.(tui.Model)
+
+	view := stripANSI(m.View())
+
+	// Welcome banner checks
+	if !strings.Contains(view, "Provider: anthropic") {
+		t.Fatalf("expected provider in welcome banner, got:\n%s", view)
+	}
+	if !strings.Contains(view, "Model:    claude-sonnet-5-5") {
+		t.Fatalf("expected model in welcome banner, got:\n%s", view)
+	}
+	if !strings.Contains(view, "Branch:   🌿 main") {
+		t.Fatalf("expected branch in welcome banner, got:\n%s", view)
+	}
+	if !strings.Contains(view, "v0.1.0-test") {
+		t.Fatalf("expected version in welcome banner, got:\n%s", view)
+	}
+
+	// Footer checks
+	if !strings.Contains(view, "[anthropic/claude-sonnet-5-5]") {
+		t.Fatalf("expected provider/model in footer, got:\n%s", view)
+	}
+	if !strings.Contains(view, "🌿 main") {
+		t.Fatalf("expected branch in footer, got:\n%s", view)
+	}
+	if !strings.Contains(view, "tokens:") {
+		t.Fatalf("expected tokens in footer, got:\n%s", view)
+	}
+}
+
+func TestTUINarrowAndShortLayout(t *testing.T) {
+	p := mock.New()
+	s := agent.NewLocal(agent.Config{Provider: p})
+	defer s.Close()
+
+	m := tui.New(s, tui.DarkTheme())
+	m.SetProviderInfo("openai", "gpt-4o")
+	m.SetVersion("0.1.0-test")
+	m.SetGitBranch("feature")
+
+	// Narrow (<80) and short (<24)
+	newM, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 18})
+	m = newM.(tui.Model)
+
+	view := stripANSI(m.View())
+
+	// Compact banner header (🔨 FORGE instead of ascii art)
+	if !strings.Contains(view, "🔨 FORGE") {
+		t.Fatalf("expected compact banner for narrow terminal, got:\n%s", view)
+	}
+	// Under height 20, help text is omitted to maximize viewport
+	if strings.Contains(view, "Alt+Enter: newline") {
+		t.Fatalf("expected help bar to be hidden in short terminal (<20 lines), got:\n%s", view)
+	}
+}

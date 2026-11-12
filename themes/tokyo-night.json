@@ -1,0 +1,15 @@
+{
+  "name": "tokyo-night",
+  "is_dark": true,
+  "background": "#1a1b26",
+  "foreground": "#c0caf5",
+  "primary": "#7aa2f7",
+  "secondary": "#bb9af7",
+  "accent": "#7dcfff",
+  "muted": "#9aa5ce",
+  "error": "#f7768e",
+  "success": "#9ece6a",
+  "warning": "#e0af68",
+  "border": "#414868",
+  "glamour_style": "dark"
+}

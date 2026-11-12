@@ -1,0 +1,15 @@
+{
+  "name": "catppuccin-mocha",
+  "is_dark": true,
+  "background": "#1e1e2e",
+  "foreground": "#cdd6f4",
+  "primary": "#89b4fa",
+  "secondary": "#cba6f7",
+  "accent": "#f5c2e7",
+  "muted": "#a6adc8",
+  "error": "#f38ba8",
+  "success": "#a6e3a1",
+  "warning": "#f9e2af",
+  "border": "#585b70",
+  "glamour_style": "dark"
+}

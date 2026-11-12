@@ -152,3 +152,31 @@ func TestIsRetryableStatus(t *testing.T) {
 	}
 }
 
+func TestRetryCallbackInvoked(t *testing.T) {
+	var callbackCalls int
+	var lastAttempt int
+	cfg := retry.Config{
+		MaxRetries:     2,
+		InitialBackoff: 5 * time.Millisecond,
+		MaxBackoff:     10 * time.Millisecond,
+		OnRetry: func(attempt, maxAttempts int, delay time.Duration, err error) {
+			callbackCalls++
+			lastAttempt = attempt
+		},
+	}
+
+	_, err := retry.Do(context.Background(), cfg, func(ctx context.Context) (*http.Response, bool, time.Duration, error) {
+		return nil, true, 0, errors.New("transient error")
+	})
+
+	if err == nil {
+		t.Fatalf("expected error after retries exhausted")
+	}
+	if callbackCalls != 2 {
+		t.Fatalf("expected 2 callback invocations, got %d", callbackCalls)
+	}
+	if lastAttempt != 2 {
+		t.Fatalf("expected last attempt to be 2, got %d", lastAttempt)
+	}
+}
+

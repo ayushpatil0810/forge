@@ -21,6 +21,9 @@ lint:
 run:
 	go run ./cmd/forge --demo
 
+demo-gif: build
+	@which vhs > /dev/null 2>&1 && vhs docs/demo/demo.tape || echo "vhs not found. Install via: winget install charmbracelet.vhs or brew install vhs"
+
 clean:
 	rm -rf $(BUILD_DIR)
 

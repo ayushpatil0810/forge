@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/ayushpatil0810/forge/internal/agent"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // RenderApprovalCard renders an interactive approval prompt card for human review.
@@ -44,7 +43,7 @@ func RenderApprovalCard(app *agent.ApprovalRequestedPayload, mode string, showDi
 	if app.Diff != "" {
 		if showDiff {
 			sb.WriteString("\n")
-			diffBox := renderColorizedDiff(app.Diff, boxWidth-4)
+			diffBox := renderColorizedDiff(app.Diff, boxWidth-4, styles)
 			sb.WriteString(diffBox)
 			sb.WriteString("\n")
 		} else {
@@ -61,23 +60,21 @@ func RenderApprovalCard(app *agent.ApprovalRequestedPayload, mode string, showDi
 	)
 	sb.WriteString("\n" + actions)
 
-	boxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#E0AF68")). // Warning amber
+	boxStyle := styles.BorderBox.
 		Padding(0, 1).
 		Width(boxWidth)
 
 	return boxStyle.Render(sb.String())
 }
 
-func renderColorizedDiff(diffText string, maxWidth int) string {
+func renderColorizedDiff(diffText string, maxWidth int, styles Styles) string {
 	lines := strings.Split(diffText, "\n")
 	var b strings.Builder
 
-	addStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#9ECE6A")) // green
-	delStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F7768E")) // red
-	hunkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#7AA2F7")) // cyan
-	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#565F89"))
+	addStyle := styles.ToolCardSuccess
+	delStyle := styles.ToolCardError
+	hunkStyle := styles.UserPrompt
+	dimStyle := styles.SystemInfo
 
 	maxLines := 25
 	for i := 0; i < len(lines) && i < maxLines; i++ {

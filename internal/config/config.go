@@ -11,15 +11,46 @@ import (
 
 // Config holds agent configuration parameters across layers.
 type Config struct {
-	Provider       string `json:"provider,omitempty"`
-	Model          string `json:"model,omitempty"`
-	MaxTurns       int    `json:"max_turns,omitempty"`
-	MaxTokens      int    `json:"max_tokens,omitempty"`
-	PermissionMode string `json:"permission_mode,omitempty"`
-	WorkspaceRoot  string `json:"workspace_root,omitempty"`
-	Theme          string `json:"theme,omitempty"`
-	SystemPrompt   string `json:"system_prompt,omitempty"`
-	Shell          string `json:"shell,omitempty"`
+	Provider       string   `json:"provider,omitempty"`
+	Model          string   `json:"model,omitempty"`
+	MaxTurns       int      `json:"max_turns,omitempty"`
+	MaxTokens      int      `json:"max_tokens,omitempty"`
+	PermissionMode string   `json:"permission_mode,omitempty"`
+	WorkspaceRoot  string   `json:"workspace_root,omitempty"`
+	Theme          string   `json:"theme,omitempty"`
+	SystemPrompt   string   `json:"system_prompt,omitempty"`
+	Shell          string   `json:"shell,omitempty"`
+	Warnings       []string `json:"-"`
+}
+
+// Redacted returns a copy of Config suitable for logging or display with warnings detached.
+func (c Config) Redacted() Config {
+	copyCfg := c
+	copyCfg.Warnings = nil
+	return copyCfg
+}
+
+// Validate checks that the configuration values are valid.
+func (c Config) Validate() error {
+	if c.Provider != "" {
+		p := strings.ToLower(c.Provider)
+		if p != "anthropic" && p != "openai" && p != "gemini" && p != "mock" {
+			return fmt.Errorf("unknown provider %q (expected anthropic, openai, gemini, or mock)", c.Provider)
+		}
+	}
+	if c.PermissionMode != "" {
+		m := strings.ToLower(c.PermissionMode)
+		if m != "ask" && m != "accept-edits" && m != "plan" && m != "yolo" {
+			return fmt.Errorf("unknown permission mode %q (expected ask, accept-edits, plan, or yolo)", c.PermissionMode)
+		}
+	}
+	if c.MaxTurns < 0 {
+		return fmt.Errorf("max_turns cannot be negative, got %d", c.MaxTurns)
+	}
+	if c.MaxTokens < 0 {
+		return fmt.Errorf("max_tokens cannot be negative, got %d", c.MaxTokens)
+	}
+	return nil
 }
 
 // LoadOptions represents caller/CLI overrides and path overrides.
@@ -103,6 +134,9 @@ func Load(opts LoadOptions) (Config, error) {
 		projectPath = filepath.Join(wsRoot, ".forge", "config.json")
 	}
 	if projectPath != "" {
+		if secWarnings := checkProjectSecurity(projectPath); len(secWarnings) > 0 {
+			cfg.Warnings = append(cfg.Warnings, secWarnings...)
+		}
 		if err := mergeFile(&cfg, projectPath); err != nil && !os.IsNotExist(err) {
 			return cfg, fmt.Errorf("reading project config %q: %w", projectPath, err)
 		}
@@ -114,7 +148,33 @@ func Load(opts LoadOptions) (Config, error) {
 	// 4. Flag/Options overrides
 	applyOptions(&cfg, opts)
 
+	if err := cfg.Validate(); err != nil {
+		return cfg, fmt.Errorf("invalid config: %w", err)
+	}
+
 	return cfg, nil
+}
+
+func checkProjectSecurity(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil
+	}
+
+	var warnings []string
+	for k, v := range raw {
+		kUpper := strings.ToUpper(k)
+		if strings.Contains(kUpper, "API_KEY") || strings.Contains(kUpper, "TOKEN") || strings.Contains(kUpper, "SECRET") {
+			if strVal, ok := v.(string); ok && strings.TrimSpace(strVal) != "" {
+				warnings = append(warnings, fmt.Sprintf("SEC-6: Potential credential %q found in project configuration file %q. Never commit API keys or secrets to project repositories; use environment variables instead.", k, path))
+			}
+		}
+	}
+	return warnings
 }
 
 func mergeFile(dst *Config, path string) error {
