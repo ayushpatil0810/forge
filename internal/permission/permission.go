@@ -29,13 +29,15 @@ func (p Policy) Check(toolName string, req tools.ApprovalRequest) Verdict {
 	if !req.Required() {
 		return Allow
 	}
-	// Dangerous commands (e.g. rm -rf /, pipe-to-shell, fork bombs) always ask regardless of mode
+	// In plan mode, all mutating and execution operations are denied (read-only)
+	if p.Mode == ModePlan {
+		return Deny
+	}
+	// Dangerous commands (e.g. rm -rf /, pipe-to-shell, fork bombs) always ask regardless of mode (even in yolo or accept-edits)
 	if req.IsDangerous || (req.Command != "" && isCommandDangerous(req.Command)) {
 		return Ask
 	}
 	switch p.Mode {
-	case ModePlan:
-		return Deny
 	case ModeYOLO:
 		return Allow
 	case ModeAcceptEdits:

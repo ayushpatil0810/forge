@@ -380,11 +380,15 @@ func (s *local) awaitApproval(ctx context.Context, id, name, input string, req t
 	s.emit(Event{
 		Type: EventApprovalRequested,
 		Approval: &ApprovalRequestedPayload{
-			ID:          id,
-			Tool:        name,
-			Input:       input,
-			Description: req.Description,
-			Diff:        req.Diff,
+			ID:             id,
+			Tool:           name,
+			Input:          input,
+			Description:    req.Description,
+			Diff:           req.Diff,
+			Command:        req.Command,
+			Cwd:            req.Cwd,
+			TimeoutSeconds: req.TimeoutSeconds,
+			IsDangerous:    req.IsDangerous,
 		},
 	})
 

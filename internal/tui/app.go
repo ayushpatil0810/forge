@@ -130,7 +130,7 @@ func (m *Model) cyclePermissionMode() {
 	case permission.ModeAcceptEdits:
 		next = permission.ModePlan
 	case permission.ModePlan:
-		next = permission.ModeYOLO
+		next = permission.ModeDefault
 	default:
 		next = permission.ModeDefault
 	}
@@ -278,8 +278,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if len(parts) == 1 {
 					m.cyclePermissionMode()
 				} else {
-					targetMode := permission.Mode(parts[1])
-					m.session.SetMode(targetMode)
+					targetMode := permission.Mode(strings.ToLower(parts[1]))
+					if targetMode == permission.ModeYOLO {
+						m.items = append(m.items, errorMessage{text: "yolo mode can only be enabled at startup via --yolo"})
+						m.textarea.Reset()
+						m.updateViewportContent()
+						return m, nil
+					}
+					if targetMode == permission.ModeDefault || targetMode == permission.ModeAcceptEdits || targetMode == permission.ModePlan {
+						m.session.SetMode(targetMode)
+					}
 				}
 				m.items = append(m.items, userMessage{text: input})
 				m.textarea.Reset()
@@ -487,7 +495,12 @@ func (m Model) View() string {
 		costInfo = fmt.Sprintf(" ($%.4f)", m.cost)
 	}
 
-	modeInfo := fmt.Sprintf("[%s] ", m.session.Mode())
+	var modeInfo string
+	if m.session.Mode() == permission.ModeYOLO {
+		modeInfo = m.styles.ToolCardError.Bold(true).Render("[⚠️ YOLO: AUTO-APPROVE ENABLED] ")
+	} else {
+		modeInfo = fmt.Sprintf("[%s] ", m.session.Mode())
+	}
 
 	if m.isStreaming {
 		status = fmt.Sprintf("%s%s%s %s", modeInfo, providerInfo, m.spinner.View(), m.activityLabel)

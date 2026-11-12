@@ -2,10 +2,13 @@ package agent_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -43,6 +46,27 @@ func copyDir(src, dst string) error {
 	})
 }
 
+func hashDir(dir string) (map[string]string, error) {
+	hashes := make(map[string]string)
+	err := filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		h := sha256.Sum256(data)
+		hashes[filepath.ToSlash(rel)] = hex.EncodeToString(h[:])
+		return nil
+	})
+	return hashes, err
+}
+
 func runGoTest(dir string) (int, string) {
 	cmd := exec.Command("go", "test", "./...")
 	cmd.Dir = dir
@@ -57,12 +81,16 @@ func runGoTest(dir string) (int, string) {
 }
 
 func TestSlice5_FixLoopExitCheck(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping slow fix loop e2e test in short mode")
+	}
+
 	fixtures := []struct {
-		name       string
-		relPath    string
-		fixFile    string
-		oldString  string
-		newString  string
+		name      string
+		relPath   string
+		fixFile   string
+		oldString string
+		newString string
 	}{
 		{
 			name:      "offbyone",
@@ -85,18 +113,34 @@ func TestSlice5_FixLoopExitCheck(t *testing.T) {
 			oldString: `"string" // BUG: should be "strings"`,
 			newString: `"strings"`,
 		},
+		{
+			name:      "boundary",
+			relPath:   filepath.Join("..", "..", "testdata", "fixfail", "boundary"),
+			fixFile:   "discount.go",
+			oldString: "if orderTotal > 100 {",
+			newString: "if orderTotal >= 100 {",
+		},
 	}
 
 	sh := tools.DetectShell("")
 
 	for _, tc := range fixtures {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			tmpDir := t.TempDir()
 			if err := copyDir(tc.relPath, tmpDir); err != nil {
 				t.Fatalf("failed to copy fixture %s: %v", tc.name, err)
 			}
 
-			// Precondition: test must fail initially
+			// Precondition 1: calculate baseline hashes before fix
+			initialHashes, err := hashDir(tmpDir)
+			if err != nil {
+				t.Fatalf("failed to compute baseline hashes: %v", err)
+			}
+
+			// Precondition 2: test must fail initially
 			initialExit, out := runGoTest(tmpDir)
 			if initialExit == 0 {
 				t.Fatalf("fixture %s was supposed to fail initially, but passed:\n%s", tc.name, out)
@@ -147,7 +191,8 @@ func TestSlice5_FixLoopExitCheck(t *testing.T) {
 				t.Fatalf("session.Send failed: %v", err)
 			}
 
-			timeout := time.After(30 * time.Second)
+			var toolOrder []string
+			timeout := time.After(45 * time.Second)
 			var completed bool
 		EventLoop:
 			for {
@@ -156,8 +201,10 @@ func TestSlice5_FixLoopExitCheck(t *testing.T) {
 					if !ok {
 						break EventLoop
 					}
+					if ev.Type == agent.EventToolStarted && ev.ToolStart != nil {
+						toolOrder = append(toolOrder, ev.ToolStart.Name)
+					}
 					if ev.Type == agent.EventApprovalRequested && ev.Approval != nil {
-						// Auto-approve any pending execution requests
 						_ = session.Respond(ev.Approval.ID, agent.DecisionAllow)
 					}
 					if ev.Type == agent.EventDone {
@@ -176,12 +223,41 @@ func TestSlice5_FixLoopExitCheck(t *testing.T) {
 				t.Fatalf("session did not complete cleanly on fixture %s", tc.name)
 			}
 
-			// Postcondition: go test in fixture must now pass!
+			// Assert tool-call order
+			wantOrder := []string{"bash", "read_file", "edit_file", "bash"}
+			if !reflect.DeepEqual(toolOrder, wantOrder) {
+				t.Fatalf("tool execution order mismatch: got %v, want %v", toolOrder, wantOrder)
+			}
+
+			// Postcondition 1: go test in fixture must now pass!
 			finalExit, finalOut := runGoTest(tmpDir)
 			if finalExit != 0 {
 				t.Fatalf("fixture %s still failing after fix loop (exit %d):\n%s", tc.name, finalExit, finalOut)
 			}
+
+			// Postcondition 2: ONLY the intended file changed; every other file retains identical hash
+			finalHashes, err := hashDir(tmpDir)
+			if err != nil {
+				t.Fatalf("failed to compute post-fix hashes: %v", err)
+			}
+
+			relFixFile := filepath.ToSlash(tc.fixFile)
+			if initialHashes[relFixFile] == finalHashes[relFixFile] {
+				t.Fatalf("expected fix file %s to have changed hash, but it remained unchanged", relFixFile)
+			}
+
+			for f, initHash := range initialHashes {
+				if f == relFixFile {
+					continue
+				}
+				postHash, exists := finalHashes[f]
+				if !exists {
+					t.Fatalf("file %s was removed unexpectedly", f)
+				}
+				if initHash != postHash {
+					t.Fatalf("unintended file modification in %s: hash before %s, hash after %s", f, initHash, postHash)
+				}
+			}
 		})
 	}
 }
-

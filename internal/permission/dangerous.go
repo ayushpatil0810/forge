@@ -6,6 +6,16 @@ import (
 )
 
 // DangerousRule specifies a rule for detecting commands that should never run without confirmation (SEC-3).
+//
+// NOTE: Dangerous command detection is a regex-based heuristic (speed bump)
+// designed to catch obvious footguns and require confirmation even in YOLO or
+// accept-edits modes. It is NOT a security sandbox. Evasions are trivially possible:
+//   - String concatenation, variable substitution, or eval (e.g. `cmd="rm"; $cmd -rf /`, `eval $(...)`)
+//   - Base64 / hex decoding before execution (e.g. `echo ... | base64 -d | sh`)
+//   - Subshells and indirect interpreters (e.g. `python3 -c "import shutil; shutil.rmtree('/')"`)
+//   - Alias or symlink indirection (e.g. `/bin/./rm`, custom function overrides)
+//   - PowerShell encoded commands (`powershell -EncodedCommand ...`)
+//   - Path traversal tricks or wildcards obscuring target paths
 type DangerousRule struct {
 	Name        string
 	Pattern     *regexp.Regexp
@@ -20,14 +30,34 @@ var DefaultDangerousRules = []DangerousRule{
 		Description: "attempted recursive deletion of root directory or drive root",
 	},
 	{
+		Name:        "recursive_deletion",
+		Pattern:     regexp.MustCompile(`(?i)(rm\s+-(?:[a-z]*r[a-z]*f|[a-z]*f[a-z]*r)\b|rm\s+-r\s+-f\b|rm\s+-f\s+-r\b|Remove-Item\b.*-(?:Recurse|r)\b.*-(?:Force|f)\b|Remove-Item\b.*-(?:Force|f)\b.*-(?:Recurse|r)\b|\b(?:del|erase)\b.*\/s\b|\b(?:rd|rmdir)\b.*\/s\b)`),
+		Description: "recursive or forced deletion (rm -rf, Remove-Item -Recurse -Force, del /s, rd /s)",
+	},
+	{
 		Name:        "git_destructive",
-		Pattern:     regexp.MustCompile(`(?i)(rm\s+-(?:rf|fr)\s+\.git|git\s+reset\s+--hard|git\s+push\s+.*(?:--force|-f\b)|git\s+clean\s+-(?:fdx|fxd|fd|fx))`),
-		Description: "destructive git operation (repository deletion, hard reset, or force push)",
+		Pattern:     regexp.MustCompile(`(?i)(rm\s+-(?:rf|fr)\s+\.git|git\s+reset\s+--hard|git\s+push\s+.*(?:--force|-f\b)|git\s+clean\s+.*(?:-[a-z]*f[a-z]*d|-[a-z]*d[a-z]*f|--force|-f\b))`),
+		Description: "destructive git operation (repository deletion, hard reset, force push, or clean -fd)",
 	},
 	{
 		Name:        "pipe_to_shell",
-		Pattern:     regexp.MustCompile(`(?i)(curl\b.*\|\s*(?:ba)?sh|wget\b.*\|\s*(?:ba)?sh|irm\b.*\|\s*iex|Invoke-RestMethod\b.*\|\s*Invoke-Expression)`),
-		Description: "remote script execution via pipe to shell",
+		Pattern:     regexp.MustCompile(`(?i)(?:curl|wget)\b.*\|\s*(?:ba|z)?sh|(?:irm|iwr|Invoke-WebRequest|Invoke-RestMethod)\b.*\|\s*(?:iex|Invoke-Expression)`),
+		Description: "remote script execution via pipe to shell (curl|sh, iwr|iex)",
+	},
+	{
+		Name:        "broad_permissions",
+		Pattern:     regexp.MustCompile(`(?i)(?:chmod|chown)\s+-[a-z]*R[a-z]*\b.*?(?:^|\s)(?:/|~|\.\.|/\*|\*|\\)(?:\s|$)`),
+		Description: "broad recursive permission or ownership change on root, home, or wildcards",
+	},
+	{
+		Name:        "credential_or_git_tamper",
+		Pattern:     regexp.MustCompile(`(?i)(?:>|>>|tee\b|Out-File|Set-Content|Add-Content|cp\b|copy\b|mv\b|move\b|rm\b|del\b).*(?:\.git[/\\].*|\.env(?:\.|$|\s|")|\.(?:ssh|aws)[/\\])`),
+		Description: "modification or overwrite targeting .git directory or credentials (.env, .ssh, .aws)",
+	},
+	{
+		Name:        "outside_workspace",
+		Pattern:     regexp.MustCompile(`(?i)(?:\.\.[/\\]|[/\\]etc[/\\]|[/\\]var[/\\]|[/\\]usr[/\\]|[/\\]root\b|[a-z]:\\Windows|[a-z]:\\Program Files)`),
+		Description: "reference to system directories or path traversal outside workspace",
 	},
 	{
 		Name:        "fork_bomb",
@@ -36,8 +66,8 @@ var DefaultDangerousRules = []DangerousRule{
 	},
 	{
 		Name:        "system_altering",
-		Pattern:     regexp.MustCompile(`(?i)(\bformat\s+[a-z]:|\bmkfs\b|\bdd\s+if=/dev/)`),
-		Description: "low-level disk format, filesystem creation, or raw block write",
+		Pattern:     regexp.MustCompile(`(?i)(\bformat\s+[a-z]:|\bmkfs\b|\bdd\b(?:\s+.*)?\b(?:if|of)=)`),
+		Description: "low-level disk format, filesystem creation, or raw block write (dd)",
 	},
 }
 
@@ -52,4 +82,3 @@ func IsDangerousCommand(cmd string) (bool, string, string) {
 	}
 	return false, "", ""
 }
-

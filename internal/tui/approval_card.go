@@ -21,8 +21,25 @@ func RenderApprovalCard(app *agent.ApprovalRequestedPayload, mode string, showDi
 
 	var sb strings.Builder
 	title := styles.ToolCardError.Bold(true).Render("⚠️  Approval Required")
-	toolInfo := fmt.Sprintf("%s: %s", styles.AssistantText.Bold(true).Render(app.Tool), app.Description)
-	sb.WriteString(fmt.Sprintf("%s\n%s\n", title, toolInfo))
+	sb.WriteString(title)
+	sb.WriteString("\n")
+
+	if app.Command != "" {
+		fmt.Fprintf(&sb, "%s: %s\n", styles.AssistantText.Bold(true).Render(app.Tool), styles.ToolCardOutput.Render("$ "+app.Command))
+		if app.Cwd != "" {
+			fmt.Fprintf(&sb, "  %s %s\n", styles.SystemInfo.Render("cwd:"), app.Cwd)
+		}
+		if app.TimeoutSeconds > 0 {
+			fmt.Fprintf(&sb, "  %s %ds\n", styles.SystemInfo.Render("timeout:"), app.TimeoutSeconds)
+		}
+		if app.Description != "" {
+			fmt.Fprintf(&sb, "  %s %s\n", styles.SystemInfo.Render("purpose:"), app.Description)
+		}
+	} else {
+		toolInfo := fmt.Sprintf("%s: %s", styles.AssistantText.Bold(true).Render(app.Tool), app.Description)
+		sb.WriteString(toolInfo)
+		sb.WriteString("\n")
+	}
 
 	if app.Diff != "" {
 		if showDiff {

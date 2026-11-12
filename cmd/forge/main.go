@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -29,6 +28,7 @@ var (
 	rootFlag     string
 	demoFlag     bool
 	yesFlag      bool
+	yoloFlag     bool
 	providerFlag string
 	modelFlag    string
 	shellFlag    string
@@ -50,12 +50,26 @@ func newRootCmd() *cobra.Command {
 	cmd.SetVersionTemplate("forge {{.Version}}\n")
 	cmd.Flags().StringVar(&rootFlag, "root", ".", "workspace root directory")
 	cmd.Flags().BoolVar(&demoFlag, "demo", false, "use a scripted mock provider (no API key needed)")
-	cmd.Flags().BoolVar(&yesFlag, "yes", false, "auto-approve every action")
+	cmd.Flags().BoolVar(&yesFlag, "yes", false, "auto-approve file edits and ordinary commands in headless mode")
+	cmd.Flags().BoolVar(&yoloFlag, "yolo", false, "run in YOLO mode (auto-approve all actions, including dangerous commands)")
 	cmd.Flags().StringVar(&providerFlag, "provider", "", "LLM provider: anthropic, openai, gemini, mock (overrides config)")
 	cmd.Flags().StringVar(&modelFlag, "model", "", "model ID to use (overrides config)")
 	cmd.Flags().StringVar(&shellFlag, "shell", "", "shell to use for command execution (e.g. pwsh, powershell.exe, bash)")
 
 	return cmd
+}
+
+func decideHeadlessApproval(isDangerous, yes, yolo bool) (agent.Decision, string) {
+	if isDangerous {
+		if yolo {
+			return agent.DecisionAllow, ""
+		}
+		return agent.DecisionDeny, "dangerous command requires --yolo"
+	}
+	if yes || yolo {
+		return agent.DecisionAllow, ""
+	}
+	return agent.DecisionDeny, "approval requested in headless mode; use --yes to approve"
 }
 
 func runForge(ctx context.Context, prompt string) error {
@@ -119,8 +133,10 @@ func runForge(ctx context.Context, prompt string) error {
 	}
 
 	permMode := permission.ModeDefault
-	if yesFlag {
+	if yoloFlag {
 		permMode = permission.ModeYOLO
+	} else if yesFlag {
+		permMode = permission.ModeAcceptEdits
 	} else if cfg.PermissionMode != "" {
 		permMode = permission.Mode(cfg.PermissionMode)
 	}
@@ -149,7 +165,6 @@ func runForge(ctx context.Context, prompt string) error {
 		return err
 	}
 
-	stdin := bufio.NewReader(os.Stdin)
 	for ev := range s.Events() {
 		switch ev.Type {
 		case agent.EventTokenDelta:
@@ -161,15 +176,11 @@ func runForge(ctx context.Context, prompt string) error {
 				fmt.Printf("\n● %s %s\n", ev.ToolStart.Name, ev.ToolStart.Input)
 			}
 		case agent.EventApprovalRequested:
-			d := agent.DecisionAllow
-			if !yesFlag && ev.Approval != nil {
-				fmt.Printf("  allow %s? [y/N] ", ev.Approval.Tool)
-				line, _ := stdin.ReadString('\n')
-				if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "y") {
-					d = agent.DecisionDeny
-				}
-			}
 			if ev.Approval != nil {
+				d, reason := decideHeadlessApproval(ev.Approval.IsDangerous, yesFlag, yoloFlag)
+				if reason != "" {
+					fmt.Printf("  [denied: %s]\n", reason)
+				}
 				_ = s.Respond(ev.Approval.ID, d)
 			}
 		case agent.EventToolFinished:

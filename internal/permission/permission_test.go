@@ -48,7 +48,7 @@ func TestPermissionPolicy(t *testing.T) {
 		t.Fatal("expected exec to ask in accept-edits mode")
 	}
 
-	// YOLO mode: everything allowed
+	// YOLO mode: everything allowed except dangerous commands
 	pYOLO := permission.Policy{Mode: permission.ModeYOLO}
 	if pYOLO.Check("read_file", readReq) != permission.Allow {
 		t.Fatal("expected read allowed in yolo mode")
@@ -58,6 +58,96 @@ func TestPermissionPolicy(t *testing.T) {
 	}
 	if pYOLO.Check("bash", bashReq) != permission.Allow {
 		t.Fatal("expected bash allowed in yolo mode")
+	}
+}
+
+func TestModeByToolMatrix(t *testing.T) {
+	type toolCase struct {
+		name string
+		req  tools.ApprovalRequest
+	}
+
+	toolCases := []toolCase{
+		{
+			name: "read_tool",
+			req:  tools.ApprovalRequest{}, // empty: no approval needed
+		},
+		{
+			name: "edit_file_normal",
+			req:  tools.ApprovalRequest{Description: "edit main.go", Diff: "-old\n+new\n"},
+		},
+		{
+			name: "edit_file_protected",
+			req:  tools.ApprovalRequest{Description: "edit .git/config", Diff: "-old\n+new\n", IsProtected: true},
+		},
+		{
+			name: "write_file_normal",
+			req:  tools.ApprovalRequest{Description: "write new.go", Diff: "+content\n"},
+		},
+		{
+			name: "bash_normal",
+			req:  tools.ApprovalRequest{Description: "go test ./...", Command: "go test ./..."},
+		},
+		{
+			name: "bash_flagged_dangerous",
+			req:  tools.ApprovalRequest{Description: "rm -rf /", Command: "rm -rf /", IsDangerous: true},
+		},
+	}
+
+	// Expected matrix: [mode][toolCase.name] -> Verdict
+	expected := map[permission.Mode]map[string]permission.Verdict{
+		permission.ModeDefault: {
+			"read_tool":              permission.Allow,
+			"edit_file_normal":       permission.Ask,
+			"edit_file_protected":    permission.Ask,
+			"write_file_normal":      permission.Ask,
+			"bash_normal":            permission.Ask,
+			"bash_flagged_dangerous": permission.Ask,
+		},
+		permission.ModeAcceptEdits: {
+			"read_tool":              permission.Allow,
+			"edit_file_normal":       permission.Allow,
+			"edit_file_protected":    permission.Ask,
+			"write_file_normal":      permission.Allow,
+			"bash_normal":            permission.Ask,
+			"bash_flagged_dangerous": permission.Ask,
+		},
+		permission.ModePlan: {
+			"read_tool":              permission.Allow,
+			"edit_file_normal":       permission.Deny,
+			"edit_file_protected":    permission.Deny,
+			"write_file_normal":      permission.Deny,
+			"bash_normal":            permission.Deny,
+			"bash_flagged_dangerous": permission.Deny,
+		},
+		permission.ModeYOLO: {
+			"read_tool":              permission.Allow,
+			"edit_file_normal":       permission.Allow,
+			"edit_file_protected":    permission.Allow,
+			"write_file_normal":      permission.Allow,
+			"bash_normal":            permission.Allow,
+			"bash_flagged_dangerous": permission.Ask, // Dangerous commands ask even in YOLO!
+		},
+	}
+
+	modes := []permission.Mode{
+		permission.ModeDefault,
+		permission.ModeAcceptEdits,
+		permission.ModePlan,
+		permission.ModeYOLO,
+	}
+
+	for _, mode := range modes {
+		policy := permission.Policy{Mode: mode}
+		for _, tc := range toolCases {
+			t.Run(string(mode)+"_"+tc.name, func(t *testing.T) {
+				want := expected[mode][tc.name]
+				got := policy.Check(tc.name, tc.req)
+				if got != want {
+					t.Fatalf("Policy{Mode: %s}.Check(%s) = %v; want %v", mode, tc.name, got, want)
+				}
+			})
+		}
 	}
 }
 

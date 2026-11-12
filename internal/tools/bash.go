@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -110,15 +111,42 @@ func (b Bash) NeedsApproval(input json.RawMessage) ApprovalRequest {
 		return ApprovalRequest{}
 	}
 
-	desc := fmt.Sprintf("$ %s", args.Command)
-	if args.Description != "" {
-		desc = fmt.Sprintf("$ %s (%s)", args.Command, args.Description)
+	workspaceRoot := b.Root
+	if workspaceRoot == "" {
+		workspaceRoot = "."
 	}
+	absRoot, _ := filepath.Abs(workspaceRoot)
 
 	return ApprovalRequest{
-		Description: desc,
-		Command:     args.Command,
+		Description:    args.Description,
+		Command:        args.Command,
+		Cwd:            absRoot,
+		TimeoutSeconds: args.TimeoutSeconds,
 	}
+}
+
+func sanitizeEnvironment(environ []string) []string {
+	var clean []string
+	for _, kv := range environ {
+		idx := strings.IndexByte(kv, '=')
+		if idx == -1 {
+			continue
+		}
+		key := kv[:idx]
+		kUpper := strings.ToUpper(key)
+		if strings.HasSuffix(kUpper, "_API_KEY") ||
+			strings.HasSuffix(kUpper, "_TOKEN") ||
+			strings.HasSuffix(kUpper, "_SECRET") ||
+			kUpper == "ANTHROPIC_API_KEY" ||
+			kUpper == "OPENAI_API_KEY" ||
+			kUpper == "GEMINI_API_KEY" ||
+			kUpper == "GOOGLE_API_KEY" {
+			continue
+		}
+		clean = append(clean, kv)
+	}
+	clean = append(clean, "CI=1", "NO_COLOR=1")
+	return clean
 }
 
 type streamingBuffer struct {
@@ -166,6 +194,8 @@ func (b Bash) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 	cmdArgs := sh.BuildArgs(args.Command)
 	cmd := exec.Command(sh.Path, cmdArgs...)
 	cmd.Dir = absRoot
+	cmd.Env = sanitizeEnvironment(os.Environ())
+	cmd.Stdin = bytes.NewReader(nil)
 
 	// Setup process group / job object for clean process-tree termination
 	pg, err := setupProcessGroup(cmd)

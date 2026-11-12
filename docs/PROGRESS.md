@@ -79,7 +79,7 @@ _Goal: first demoable thing. Streaming chat, no tools yet._
 
 **Exit check:** `forge` opens, streams a multi-paragraph answer with a highlighted code block, and `Esc` stops it cleanly.
 
-### Slice 3: Read-only tools (agent can explore a repo) `DOING (awaiting live verification)`
+### Slice 3: Read-only tools (agent can explore a repo) `DONE`
 
 _Goal: the agent can answer questions about a codebase._
 
@@ -92,9 +92,9 @@ _Goal: the agent can answer questions about a codebase._
 - [x] Tool-call cards in TUI (status, duration, collapsible `Ctrl+O`) `T-2`
 - [x] `AGENTS.md` / `CLAUDE.md` loaded into the system prompt `S-5`
 
-**Exit check:** "Explain how this repo is structured" works on a fixture repo, with visible tool cards and no writes.
+**Exit check:** "Explain how this repo is structured" works on a fixture repo, with visible tool cards and no writes (verified live on OpenAI).
 
-### Slice 3b: Multi-provider: OpenAI + Gemini `DOING (awaiting live verification)`
+### Slice 3b: Multi-provider: OpenAI + Gemini `DOING (OpenAI verified; Anthropic and Gemini pending)`
 
 _Goal: provider-agnostic core with OpenAI and Gemini streaming, catalog, and shared retry/contract suite._
 
@@ -105,9 +105,9 @@ _Goal: provider-agnostic core with OpenAI and Gemini streaming, catalog, and sha
 - [x] Layered config `--provider` and `--model` wiring with factory
 - [x] Token cost tracking and display in TUI footer
 
-**Exit check:** the provider contract test suite passes for Anthropic, OpenAI, and Gemini under `-race`.
+**Exit check:** the provider contract test suite passes for Anthropic, OpenAI, and Gemini under `-race` (OpenAI verified live; Anthropic/Gemini live runs pending).
 
-### Slice 4: Edit + approve (the agent can change code) `DOING (awaiting live verification)`
+### Slice 4: Edit + approve (the agent can change code) `DONE`
 
 _Goal: safe edits with human-in-the-loop. This is the core product moment._
 
@@ -119,9 +119,9 @@ _Goal: safe edits with human-in-the-loop. This is the core product moment._
 - [x] Permission modes: `ask` (default) and `plan` (read-only) `P-1`
 - [x] Re-read file after edit; fuzz or property tests for the edit matcher
 
-**Exit check:** agent proposes an edit, user sees the diff, approves, file changes; rejecting leaves the file untouched.
+**Exit check:** agent proposes an edit, user sees the diff, approves, file changes; rejecting leaves the file untouched (verified live on OpenAI).
 
-### Slice 5: Bash + autonomous fix loop `DOING (awaiting live verification)`
+### Slice 5: Bash + autonomous fix loop `DONE`
 
 _Goal: the MVP "fix a failing test" scenario works end-to-end._
 
@@ -132,9 +132,9 @@ _Goal: the MVP "fix a failing test" scenario works end-to-end._
 - [x] Basic dangerous-command pattern check `SEC-3`
 - [x] Windows shell handling decision implemented (see Decisions)
 
-**Exit check (MVP exit criteria from SPEC §10):** given a fixture Go repo with a failing test, the agent finds the bug, edits the code, runs `go test`, and reports success, entirely within the TUI.
+**Exit check (MVP exit criteria from SPEC §10):** given a fixture Go repo with a failing test, the agent finds the bug, edits the code, runs `go test`, and reports success, entirely within the TUI (verified live on OpenAI).
 
-### Slice 6: MVP hardening and demo `TODO`
+### Slice 6: MVP hardening and demo `DOING`
 
 _Goal: something you can show and publish._
 

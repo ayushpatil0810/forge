@@ -19,11 +19,13 @@ type Result struct {
 // ApprovalRequest details user approval requirements from SPEC §6.3.
 // Zero value means no approval needed.
 type ApprovalRequest struct {
-	Description string `json:"description,omitempty"`
-	Diff        string `json:"diff,omitempty"`
-	IsProtected bool   `json:"isProtected,omitempty"`
-	IsDangerous bool   `json:"isDangerous,omitempty"`
-	Command     string `json:"command,omitempty"`
+	Description    string `json:"description,omitempty"`
+	Diff           string `json:"diff,omitempty"`
+	IsProtected    bool   `json:"isProtected,omitempty"`
+	IsDangerous    bool   `json:"isDangerous,omitempty"`
+	Command        string `json:"command,omitempty"`
+	Cwd            string `json:"cwd,omitempty"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 }
 
 func (a ApprovalRequest) Required() bool {
