@@ -11,6 +11,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,6 +38,17 @@ type Logger struct {
 	mu              sync.Mutex
 	sessionSeq      map[string]int
 	sessionLastHash map[string]string
+	warning         string
+	maxBytes        int64
+}
+
+type chainState struct {
+	Sessions map[string]sessionCursor `json:"sessions"`
+}
+
+type sessionCursor struct {
+	Seq  int    `json:"seq"`
+	Hash string `json:"hash"`
 }
 
 // New creates a new audit logger.
@@ -100,13 +114,15 @@ func (l *Logger) Log(_ context.Context, sessionID, event, tool, actionSummary, d
 	}
 	rec.RecordSHA256 = recHash
 
-	// Rotate if needed
-	if err := l.maybeRotate(); err != nil {
-		return l.handleError(err)
-	}
-
-	// Write record
-	if err := l.appendRecord(rec); err != nil {
+	if err := l.withFileLock(func() error {
+		if err := l.maybeRotate(); err != nil {
+			return err
+		}
+		if err := l.appendRecord(rec); err != nil {
+			return err
+		}
+		return l.writeState(sessionID, seq, recHash)
+	}); err != nil {
 		return l.handleError(err)
 	}
 
@@ -115,12 +131,65 @@ func (l *Logger) Log(_ context.Context, sessionID, event, tool, actionSummary, d
 	return nil
 }
 
+func (l *Logger) withFileLock(fn func() error) error {
+	if l.cfg.Path == "" {
+		return fn()
+	}
+	if err := os.MkdirAll(filepath.Dir(l.cfg.Path), 0700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(l.cfg.Path+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	if err := lockExclusive(f); err != nil {
+		return err
+	}
+	defer func() { _ = unlockExclusive(f) }()
+	return fn()
+}
+
+func statePath(logPath string) string {
+	return logPath + ".state.json"
+}
+
+func (l *Logger) writeState(sessionID string, seq int, hash string) error {
+	path := statePath(l.cfg.Path)
+	st := chainState{Sessions: map[string]sessionCursor{}}
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &st)
+		if st.Sessions == nil {
+			st.Sessions = map[string]sessionCursor{}
+		}
+	}
+	st.Sessions[sessionID] = sessionCursor{Seq: seq, Hash: hash}
+	data, err := json.Marshal(st)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0600)
+}
+
+// Warning returns the fail-open audit warning, if a write has failed while
+// audit.required is false. It is set once.
+func (l *Logger) Warning() string {
+	if l == nil {
+		return ""
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.warning
+}
+
 func (l *Logger) handleError(err error) error {
 	if l.cfg.Required {
 		return fmt.Errorf("%w: %v", ErrRequired, err)
 	}
-	// Fail-open: warn and continue
-	fmt.Fprintf(os.Stderr, "warning: audit log write failed: %v\n", err)
+	if l.warning == "" {
+		l.warning = fmt.Sprintf("audit log write failed: %v", err)
+		fmt.Fprintf(os.Stderr, "warning: %s\n", l.warning)
+	}
 	return nil
 }
 
@@ -167,87 +236,159 @@ func (l *Logger) maybeRotate() error {
 	}
 
 	maxBytes := int64(l.cfg.MaxMB) * 1024 * 1024
+	if l.maxBytes > 0 {
+		maxBytes = l.maxBytes
+	}
 	if fi.Size() < maxBytes {
 		return nil
 	}
 
-	// Rotate files: path.1 -> path.2, etc.
-	rotated := fmt.Sprintf("%s.%d", path, time.Now().Unix())
-	return os.Rename(path, rotated)
+	// Rotate to a unique sibling so two rotations in the same second cannot
+	// overwrite each other. Verify reads these siblings back in name order.
+	stamp := time.Now().UnixNano()
+	for {
+		rotated := fmt.Sprintf("%s.%d", path, stamp)
+		if _, err := os.Stat(rotated); os.IsNotExist(err) {
+			return os.Rename(path, rotated)
+		}
+		stamp++
+	}
 }
 
-// Verify validates the cryptographic hash chain of the audit log.
-// If sessionID is specified, only that session is verified; otherwise all sessions are checked.
+// Verify validates the hash chain across the current log and any rotated files,
+// then compares the end of each session with the state file written beside the log.
+// A log with its tail deleted fails. An attacker who can rewrite both the log and
+// the state file can still present a consistent history.
 func Verify(path string, sessionID string) (int, error) {
-	f, err := os.Open(path)
+	st, err := readState(statePath(path))
 	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = f.Close() }()
+	files, err := chainFiles(path)
+	if err != nil {
+		return 0, err
+	}
 
-	scanner := bufio.NewScanner(f)
-	// Allow large lines
-	buf := make([]byte, 1024*1024)
-	scanner.Buffer(buf, 10*1024*1024)
-
-	lineNum := 0
 	verifiedCount := 0
 	sessionLastSeq := make(map[string]int)
 	sessionLastHash := make(map[string]string)
+	lineNum := 0
 
-	for scanner.Scan() {
-		lineNum++
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-
-		var r Record
-		if err := json.Unmarshal(line, &r); err != nil {
-			return verifiedCount, fmt.Errorf("%w: line %d is invalid JSON: %v", ErrTampered, lineNum, err)
-		}
-
-		if sessionID != "" && r.SessionID != sessionID {
-			continue
-		}
-
-		// 1. Verify record internal hash
-		expectedHash, err := ComputeRecordHash(r)
+	for _, file := range files {
+		f, err := os.Open(file)
 		if err != nil {
-			return verifiedCount, fmt.Errorf("%w: line %d error computing hash: %v", ErrTampered, lineNum, err)
-		}
-		if r.RecordSHA256 != expectedHash {
-			return verifiedCount, fmt.Errorf("%w: line %d record hash mismatch (modified record): got %s, want %s", ErrTampered, lineNum, r.RecordSHA256, expectedHash)
-		}
-
-		// 2. Verify sequence number
-		lastSeq := sessionLastSeq[r.SessionID]
-		if r.Seq != lastSeq+1 {
-			return verifiedCount, fmt.Errorf("%w: line %d session %s sequence jump/gap (deleted or reordered record): got seq %d, expected %d", ErrTampered, lineNum, r.SessionID, r.Seq, lastSeq+1)
-		}
-
-		// 3. Verify previous record hash link
-		lastHash := sessionLastHash[r.SessionID]
-		if lastHash == "" {
-			if r.PrevSHA256 != GenesisHash {
-				return verifiedCount, fmt.Errorf("%w: line %d session %s initial record does not link to genesis hash", ErrTampered, lineNum, r.SessionID)
+			if os.IsNotExist(err) && file == path {
+				continue
 			}
-		} else {
-			if r.PrevSHA256 != lastHash {
+			return verifiedCount, err
+		}
+		scanner := bufio.NewScanner(f)
+		buf := make([]byte, 64*1024)
+		scanner.Buffer(buf, 10*1024*1024)
+		for scanner.Scan() {
+			lineNum++
+			line := scanner.Bytes()
+			if len(line) == 0 {
+				continue
+			}
+			var r Record
+			if err := json.Unmarshal(line, &r); err != nil {
+				_ = f.Close()
+				return verifiedCount, fmt.Errorf("%w: line %d is invalid JSON: %v", ErrTampered, lineNum, err)
+			}
+			if sessionID != "" && r.SessionID != sessionID {
+				continue
+			}
+			expectedHash, err := ComputeRecordHash(r)
+			if err != nil {
+				_ = f.Close()
+				return verifiedCount, fmt.Errorf("%w: line %d error computing hash: %v", ErrTampered, lineNum, err)
+			}
+			if r.RecordSHA256 != expectedHash {
+				_ = f.Close()
+				return verifiedCount, fmt.Errorf("%w: line %d record hash mismatch (modified record): got %s, want %s", ErrTampered, lineNum, r.RecordSHA256, expectedHash)
+			}
+			lastSeq := sessionLastSeq[r.SessionID]
+			if r.Seq != lastSeq+1 {
+				_ = f.Close()
+				return verifiedCount, fmt.Errorf("%w: line %d session %s sequence jump/gap (deleted or reordered record): got seq %d, expected %d", ErrTampered, lineNum, r.SessionID, r.Seq, lastSeq+1)
+			}
+			lastHash := sessionLastHash[r.SessionID]
+			if lastHash == "" {
+				if r.PrevSHA256 != GenesisHash {
+					_ = f.Close()
+					return verifiedCount, fmt.Errorf("%w: line %d session %s initial record does not link to genesis hash", ErrTampered, lineNum, r.SessionID)
+				}
+			} else if r.PrevSHA256 != lastHash {
+				_ = f.Close()
 				return verifiedCount, fmt.Errorf("%w: line %d session %s hash chain broken: got prev %s, expected %s", ErrTampered, lineNum, r.SessionID, r.PrevSHA256, lastHash)
 			}
+			sessionLastSeq[r.SessionID] = r.Seq
+			sessionLastHash[r.SessionID] = r.RecordSHA256
+			verifiedCount++
 		}
-
-		sessionLastSeq[r.SessionID] = r.Seq
-		sessionLastHash[r.SessionID] = r.RecordSHA256
-		verifiedCount++
+		scanErr := scanner.Err()
+		_ = f.Close()
+		if scanErr != nil {
+			return verifiedCount, scanErr
+		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		return verifiedCount, err
+	check := st.Sessions
+	if sessionID != "" {
+		cur, ok := st.Sessions[sessionID]
+		if !ok {
+			return verifiedCount, fmt.Errorf("%w: state file has no cursor for session %s", ErrTampered, sessionID)
+		}
+		check = map[string]sessionCursor{sessionID: cur}
 	}
-
+	for id, want := range check {
+		if sessionLastSeq[id] != want.Seq || sessionLastHash[id] != want.Hash {
+			return verifiedCount, fmt.Errorf("%w: session %s is missing records from the end (log seq %d, state seq %d)", ErrTampered, id, sessionLastSeq[id], want.Seq)
+		}
+	}
 	return verifiedCount, nil
+}
+
+func readState(path string) (chainState, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return chainState{}, fmt.Errorf("%w: audit state file missing; cannot confirm the log was not truncated", ErrTampered)
+		}
+		return chainState{}, err
+	}
+	var st chainState
+	if err := json.Unmarshal(data, &st); err != nil {
+		return chainState{}, fmt.Errorf("%w: audit state file is invalid: %v", ErrTampered, err)
+	}
+	if st.Sessions == nil {
+		st.Sessions = map[string]sessionCursor{}
+	}
+	return st, nil
+}
+
+func chainFiles(path string) ([]string, error) {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var rotated []string
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, base+".") {
+			continue
+		}
+		suf := strings.TrimPrefix(name, base+".")
+		if _, err := strconv.ParseInt(suf, 10, 64); err != nil {
+			continue
+		}
+		rotated = append(rotated, filepath.Join(dir, name))
+	}
+	sort.Strings(rotated)
+	return append(rotated, path), nil
 }
 
 // ReadRecords reads records from the audit file, optionally filtering by session and tail count.

@@ -18,6 +18,8 @@ func (pg *ProcessGroup) Attach(cmd *exec.Cmd) error {
 	return nil
 }
 
+func (pg *ProcessGroup) Close() {}
+
 func (pg *ProcessGroup) Kill(cmd *exec.Cmd) {
 	if cmd != nil && cmd.Process != nil {
 		pgid, err := syscall.Getpgid(cmd.Process.Pid)

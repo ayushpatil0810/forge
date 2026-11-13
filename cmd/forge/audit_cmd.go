@@ -24,7 +24,7 @@ func newAuditCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "audit",
-		Short: "Inspect and verify tamper-evident audit logs (SPEC §3.3 P-7)",
+		Short: "Inspect and verify audit logs (tamper-evident against edits, deletions and truncation, not against rewriting both files)",
 	}
 	cmd.PersistentFlags().StringVar(&rootDir, "root", ".", "workspace root directory")
 	cmd.PersistentFlags().StringVar(&pathFlag, "path", "", "override path to audit log file")
@@ -85,7 +85,7 @@ func newAuditCmd() *cobra.Command {
 
 	verifyCmd := &cobra.Command{
 		Use:   "verify",
-		Short: "Verify cryptographic SHA-256 tamper-evident hash chain",
+		Short: "Verify the hash chain and that the log was not truncated",
 		RunE: func(c *cobra.Command, _ []string) error {
 			targetPath := pathFlag
 			if targetPath == "" {

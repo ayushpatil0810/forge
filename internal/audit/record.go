@@ -8,7 +8,8 @@ import (
 
 const GenesisHash = "0000000000000000000000000000000000000000000000000000000000000000"
 
-// Record is an immutable, tamper-evident audit record (SPEC §3.3 P-7).
+// Record is one audit event. The chain is tamper-evident against edits, deletions
+// and truncation, but not against an attacker who can rewrite both the log and its state file.
 type Record struct {
 	Timestamp      string `json:"timestamp"`
 	SessionID      string `json:"session_id"`

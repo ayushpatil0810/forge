@@ -123,7 +123,7 @@ func newRootCmd() *cobra.Command {
 	cmd.PersistentFlags().BoolVar(&demoFlag, "demo", false, "use a scripted mock provider (no API key needed)")
 	cmd.PersistentFlags().Float64Var(&demoSpeedFlag, "demo-speed", 1.0, "playback speed multiplier for demo (0 is instant)")
 	cmd.PersistentFlags().BoolVar(&yesFlag, "yes", false, "auto-approve file edits and ordinary commands in headless mode")
-	cmd.PersistentFlags().BoolVar(&yoloFlag, "yolo", false, "run in YOLO mode (auto-approve all actions, including dangerous commands)")
+	cmd.PersistentFlags().BoolVar(&yoloFlag, "yolo", false, "run in YOLO mode (auto-approve actions that are not on the safety floor; dangerous commands and protected paths still require approval and are denied headless)")
 	cmd.PersistentFlags().StringVar(&providerFlag, "provider", "", "LLM provider: anthropic, openai, gemini, mock (overrides config)")
 	cmd.PersistentFlags().StringVar(&modelFlag, "model", "", "model ID to use (overrides config)")
 	cmd.PersistentFlags().StringVar(&baseURLFlag, "base-url", "", "custom API base URL (e.g. for Ollama http://localhost:11434/v1)")
@@ -606,12 +606,16 @@ func newSessionsCmd() *cobra.Command {
 	return cmd
 }
 
+func bashEnvAllow(cfg config.Config) []string {
+	if cfg.Bash == nil {
+		return nil
+	}
+	return cfg.Bash.EnvAllow
+}
+
 func decideHeadlessApproval(isDangerous, isProtected, yes, yolo bool) (agent.Decision, string) {
 	if isDangerous {
-		if yolo {
-			return agent.DecisionAllow, ""
-		}
-		return agent.DecisionDeny, "dangerous command requires --yolo"
+		return agent.DecisionDeny, "dangerous command cannot be auto-approved in headless mode"
 	}
 	if isProtected {
 		return agent.DecisionDeny, "protected path modification cannot be auto-approved in headless mode"
@@ -821,7 +825,7 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 		}
 		provider = p
 		sh := tools.DetectShell(cfg.Shell)
-		toolRegistry = tools.DefaultTools(cfg.WorkspaceRoot, sh)
+		toolRegistry = tools.DefaultToolsWithEnvAllow(cfg.WorkspaceRoot, bashEnvAllow(cfg), sh)
 	}
 
 	resolvedMode := permission.ModeDefault
@@ -1221,7 +1225,7 @@ func runInteractive(ctx context.Context) error {
 		}
 		provider = p
 		sh := tools.DetectShell(cfg.Shell)
-		toolRegistry = tools.DefaultTools(cfg.WorkspaceRoot, sh)
+		toolRegistry = tools.DefaultToolsWithEnvAllow(cfg.WorkspaceRoot, bashEnvAllow(cfg), sh)
 	}
 
 	permMode := permission.ModeDefault

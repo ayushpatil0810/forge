@@ -2,13 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ayushpatil0810/forge/internal/agent"
+	"github.com/ayushpatil0810/forge/internal/credentials"
+	"github.com/zalando/go-keyring"
 )
 
 func TestRootCmdVersion(t *testing.T) {
@@ -45,6 +49,7 @@ func TestRootCmdHelp(t *testing.T) {
 
 func TestRootCmdMissingAPIKeyFailsFast(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
+	_ = keyring.Delete(credentials.ServiceName, "anthropic")
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"hello"})
 
@@ -54,6 +59,29 @@ func TestRootCmdMissingAPIKeyFailsFast(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
 		t.Fatalf("expected error to mention ANTHROPIC_API_KEY, got: %v", err)
+	}
+}
+
+func TestStoredKeyDoesNotReachNetwork(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("GEMINI_API_KEY", "")
+	const secret = "sk-ant-test-not-a-real-key"
+	if err := keyring.Set(credentials.ServiceName, "anthropic", secret); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = keyring.Delete(credentials.ServiceName, "anthropic") })
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"run", "--yes", "--output", "text", "hello"})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	err := cmd.ExecuteContext(ctx)
+	if err == nil {
+		t.Fatal("expected the provider call to fail closed at the test network guard")
+	}
+	if !strings.Contains(err.Error(), "non-loopback") && !strings.Contains(err.Error(), "test network guard") {
+		t.Fatalf("expected the dial to be refused by the test guard, got: %v", err)
 	}
 }
 
@@ -196,7 +224,7 @@ func TestDecideHeadlessApproval(t *testing.T) {
 			yes:         false,
 			yolo:        false,
 			want:        agent.DecisionDeny,
-			wantReason:  "dangerous command requires --yolo",
+			wantReason:  "dangerous command cannot be auto-approved in headless mode",
 		},
 		{
 			name:        "dangerous command with --yes only is still denied",
@@ -205,16 +233,16 @@ func TestDecideHeadlessApproval(t *testing.T) {
 			yes:         true,
 			yolo:        false,
 			want:        agent.DecisionDeny,
-			wantReason:  "dangerous command requires --yolo",
+			wantReason:  "dangerous command cannot be auto-approved in headless mode",
 		},
 		{
-			name:        "dangerous command with --yolo is approved",
+			name:        "dangerous command with --yolo is still denied",
 			isDangerous: true,
 			isProtected: false,
 			yes:         false,
 			yolo:        true,
-			want:        agent.DecisionAllow,
-			wantReason:  "",
+			want:        agent.DecisionDeny,
+			wantReason:  "dangerous command cannot be auto-approved in headless mode",
 		},
 		{
 			name:        "protected path modification is always denied in headless",

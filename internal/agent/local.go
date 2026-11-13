@@ -3,12 +3,14 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/ayushpatil0810/forge/internal/audit"
 	"github.com/ayushpatil0810/forge/internal/llm"
 	"github.com/ayushpatil0810/forge/internal/llm/retry"
 	"github.com/ayushpatil0810/forge/internal/permission"
@@ -75,6 +77,7 @@ type local struct {
 	history []llm.Message // only touched by the single running turn
 
 	checkpointTakenInTurn bool
+	auditWarned           bool
 }
 
 func (s *local) ID() string { return s.id }
@@ -403,8 +406,8 @@ func (s *local) runToolCall(ctx context.Context, c llm.ToolCall) llm.Message {
 
 	switch evalRes.Verdict {
 	case permission.Deny:
-		if s.cfg.AuditLogger != nil {
-			_ = s.cfg.AuditLogger.Log(ctx, s.id, "decision", c.Name, string(c.Input), "deny", evalRes.Source, nil, nil, "")
+		if msg := s.writeAudit(ctx, "decision", c.Name, string(c.Input), "deny", evalRes.Source, nil, nil, ""); msg != "" {
+			return result(ToolDenied, msg, msg, time.Time{})
 		}
 		return result(ToolDenied, "denied by permission policy", "denied by permission policy", time.Time{})
 	case permission.Ask:
@@ -417,8 +420,8 @@ func (s *local) runToolCall(ctx context.Context, c llm.ToolCall) llm.Message {
 		}
 		switch resp.decision {
 		case DecisionDeny:
-			if s.cfg.AuditLogger != nil {
-				_ = s.cfg.AuditLogger.Log(ctx, s.id, "decision", c.Name, string(c.Input), "deny", "user", nil, nil, "")
+			if msg := s.writeAudit(ctx, "decision", c.Name, string(c.Input), "deny", "user", nil, nil, ""); msg != "" {
+				return result(ToolDenied, msg, msg, time.Time{})
 			}
 			return result(ToolDenied, "the user denied this action", "the user denied this action", time.Time{})
 		case DecisionDenyWithFeedback:
@@ -426,8 +429,8 @@ func (s *local) runToolCall(ctx context.Context, c llm.ToolCall) llm.Message {
 			if len(fb) > 500 {
 				fb = fb[:500]
 			}
-			if s.cfg.AuditLogger != nil {
-				_ = s.cfg.AuditLogger.Log(ctx, s.id, "decision", c.Name, string(c.Input), "deny", "user-feedback", nil, nil, "")
+			if msg := s.writeAudit(ctx, "decision", c.Name, string(c.Input), "deny", "user-feedback", nil, nil, ""); msg != "" {
+				return result(ToolDenied, msg, msg, time.Time{})
 			}
 			msg := "the user denied this action: " + fb
 			return result(ToolDenied, msg, msg, time.Time{})
@@ -435,28 +438,25 @@ func (s *local) runToolCall(ctx context.Context, c llm.ToolCall) llm.Message {
 			s.mu.Lock()
 			s.always[c.Name] = true
 			s.mu.Unlock()
-			if s.cfg.AuditLogger != nil {
-				_ = s.cfg.AuditLogger.Log(ctx, s.id, "decision", c.Name, string(c.Input), "allow", "session", nil, nil, "")
+			if msg := s.writeAudit(ctx, "decision", c.Name, string(c.Input), "allow", "session", nil, nil, ""); msg != "" {
+				return result(ToolDenied, msg, msg, time.Time{})
 			}
 		case DecisionAlwaysAllow:
 			if s.cfg.PolicySet != nil {
 				ruleStr := generateNarrowRule(c.Name, string(c.Input), appReq)
 				_ = s.cfg.PolicySet.AddRule(policy.ScopeUser, policy.ActionAllow, ruleStr)
 			}
-			s.mu.Lock()
-			s.always[c.Name] = true
-			s.mu.Unlock()
-			if s.cfg.AuditLogger != nil {
-				_ = s.cfg.AuditLogger.Log(ctx, s.id, "decision", c.Name, string(c.Input), "allow", "user-saved", nil, nil, "")
+			if msg := s.writeAudit(ctx, "decision", c.Name, string(c.Input), "allow", "user-saved", nil, nil, ""); msg != "" {
+				return result(ToolDenied, msg, msg, time.Time{})
 			}
 		default: // DecisionAllow
-			if s.cfg.AuditLogger != nil {
-				_ = s.cfg.AuditLogger.Log(ctx, s.id, "decision", c.Name, string(c.Input), "allow", "user", nil, nil, "")
+			if msg := s.writeAudit(ctx, "decision", c.Name, string(c.Input), "allow", "user", nil, nil, ""); msg != "" {
+				return result(ToolDenied, msg, msg, time.Time{})
 			}
 		}
 	case permission.Allow:
-		if s.cfg.AuditLogger != nil {
-			_ = s.cfg.AuditLogger.Log(ctx, s.id, "decision", c.Name, string(c.Input), "allow", evalRes.Source, nil, nil, "")
+		if msg := s.writeAudit(ctx, "decision", c.Name, string(c.Input), "allow", evalRes.Source, nil, nil, ""); msg != "" {
+			return result(ToolDenied, msg, msg, time.Time{})
 		}
 	}
 
@@ -519,8 +519,8 @@ func (s *local) runToolCall(ctx context.Context, c llm.ToolCall) llm.Message {
 	}
 	durMs := time.Since(start).Milliseconds()
 
-	if s.cfg.AuditLogger != nil {
-		_ = s.cfg.AuditLogger.Log(ctx, s.id, "tool_result", c.Name, string(c.Input), "", "", exitCode, &durMs, cleanOutput)
+	if msg := s.writeAudit(ctx, "tool_result", c.Name, string(c.Input), "", "", exitCode, &durMs, cleanOutput); msg != "" {
+		return result(ToolError, msg, msg, start)
 	}
 
 	if res.IsError {
@@ -567,6 +567,26 @@ func generateNarrowRule(toolName, input string, req tools.ApprovalRequest) strin
 
 func isMutatingTool(name string) bool {
 	return name == "bash" || name == "edit_file" || name == "write_file"
+}
+
+func (s *local) writeAudit(ctx context.Context, event, tool, input, decision, source string, exitCode *int, dur *int64, output string) string {
+	if s.cfg.AuditLogger == nil {
+		return ""
+	}
+	err := s.cfg.AuditLogger.Log(ctx, s.id, event, tool, audit.SummarizeAction(tool, input), decision, source, exitCode, dur, output)
+	if err != nil && errors.Is(err, audit.ErrRequired) {
+		return "audit log write failed and audit.required is true; this tool call was denied. " + err.Error()
+	}
+	if w := s.cfg.AuditLogger.Warning(); w != "" {
+		s.mu.Lock()
+		already := s.auditWarned
+		s.auditWarned = true
+		s.mu.Unlock()
+		if !already {
+			s.emit(Event{Type: EventNotice, Notice: w})
+		}
+	}
+	return ""
 }
 
 func (s *local) isAlwaysAllowed(name string) bool {
