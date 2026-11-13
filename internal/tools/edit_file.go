@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -221,31 +220,6 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 		return fmt.Errorf("replacing file: %w", err)
 	}
 	return nil
-}
-
-func replaceFile(src, dst string) error {
-	// Attempt direct rename first
-	if err := os.Rename(src, dst); err == nil {
-		return nil
-	}
-	// Fallback for Windows if destination exists
-	_ = os.Remove(dst)
-	if err := os.Rename(src, dst); err == nil {
-		return nil
-	}
-	// Final fallback: copy bytes
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = in.Close() }()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = out.Close() }()
-	_, err = io.Copy(out, in)
-	return err
 }
 
 func formatSnippet(content string, maxLines int) string {
