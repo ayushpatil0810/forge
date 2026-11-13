@@ -267,11 +267,115 @@ func IsCredentialPath(p string) bool {
 	return IsProtectedPath(p)
 }
 
-// protectedPath classifies both the name the caller passed and the resolved path.
-// root is the workspace root; identity checks (F-002) use it as well.
+// protectedPath classifies the requested name, the resolved name, and — when the
+// file has extra links or the path went through a symlink — its identity against
+// protected names in the workspace root and the parent directory (F-002).
 func protectedPath(root, requested, resolved string) bool {
-	_ = root
-	return IsProtectedPath(requested) || (resolved != "" && IsProtectedPath(resolved))
+	if IsProtectedPath(requested) || (resolved != "" && IsProtectedPath(resolved)) {
+		return true
+	}
+	r, err := resolvePath(root, requested)
+	if err != nil {
+		return false
+	}
+	if IsProtectedPath(r.Path) {
+		return true
+	}
+	return identityProtected(root, r)
+}
+
+// entryProtected classifies a path a directory walk already found.
+func entryProtected(root, rel, full string) bool {
+	if IsProtectedPath(rel) || IsProtectedPath(full) {
+		return true
+	}
+	fi, err := os.Lstat(full)
+	if err != nil {
+		return false
+	}
+	resolved := full
+	traversed := isLink(fi, full)
+	if traversed {
+		if target, err := resolveLink(full); err == nil {
+			resolved = stripExtendedPrefix(target)
+			if IsProtectedPath(resolved) {
+				return true
+			}
+		}
+	}
+	if fi.IsDir() && !traversed {
+		return false
+	}
+	if info, err := os.Stat(resolved); err == nil && info.IsDir() {
+		return false
+	}
+	return identityProtected(root, resolvedPath{Path: resolved, Traversed: traversed})
+}
+
+func identityProtected(root string, r resolvedPath) bool {
+	if r.Path == "" {
+		return false
+	}
+	key, nlink, err := statIdentity(r.Path)
+	if err != nil || !key.ok {
+		return false
+	}
+	if nlink <= 1 && !r.Traversed {
+		return false
+	}
+	realRoot, err := canonicalRoot(root)
+	if err != nil {
+		realRoot = root
+	}
+	dirs := []string{realRoot}
+	parent := filepath.Dir(r.Path)
+	if !sameDir(parent, realRoot) {
+		dirs = append(dirs, parent)
+	}
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			if !IsProtectedPath(e.Name()) {
+				continue
+			}
+			other := filepath.Join(dir, e.Name())
+			if sameIdentity(r.Path, other, key) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func sameIdentity(aPath, bPath string, aKey fileKey) bool {
+	bKey, _, err := statIdentity(bPath)
+	if err == nil && bKey.ok && aKey == bKey {
+		return true
+	}
+	aInfo, err1 := os.Stat(aPath)
+	bInfo, err2 := os.Stat(bPath)
+	return err1 == nil && err2 == nil && os.SameFile(aInfo, bInfo)
+}
+
+func sameDir(a, b string) bool {
+	a = filepath.Clean(a)
+	b = filepath.Clean(b)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
+type fileKey struct {
+	dev uint64
+	ino uint64
+	ok  bool
 }
 
 func segmentProtected(seg string) bool {
