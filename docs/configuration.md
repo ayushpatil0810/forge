@@ -126,6 +126,7 @@ The following keys are **strictly forbidden** in `.forge/config.json` and will b
 - `permission_mode` (any value, including `ask`, `accept-edits`, `plan`, and `yolo`): **Ignored** (a cloned repository must not grant a permission mode).
 - `system_prompt`: **Ignored** (a cloned repository must not set the system prompt).
 - `yolo`: **Ignored** (repository files cannot disable human confirmation prompts).
+- `audit`, `sessions`, and `redaction`: **Ignored** (a cloned repository cannot turn audit off, move the session database, or disable redaction).
 - Credentials (`*_api_key`, `token`, `secret`): **Ignored** (prevents committing secrets to git).
 
 Any ignored keys are listed under `ignored_project_keys` in `forge config`, logged to `stderr` with a `SEC-6` security alert, and shown once in the TUI on the first screen.
