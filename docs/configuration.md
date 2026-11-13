@@ -26,13 +26,13 @@ Every configuration option supported by Forge:
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `provider` | `string` | `"anthropic"` | `FORGE_PROVIDER` | `--provider` | Default LLM provider (`anthropic`, `openai`, `gemini`, `mock`). |
 | `model` | `string` | `"claude-sonnet-5-5"` | `FORGE_MODEL` | `--model` | Model identifier to use. Defaults to provider's flagship model. |
-| `base_url` | `string` | `""` | `FORGE_BASE_URL` / `OPENAI_BASE_URL` | `--base-url` | Custom API base URL (e.g. for Ollama, vLLM, or OpenAI-compatible proxies). |
+| `base_url` | `string` | `""` | `FORGE_BASE_URL`; `OPENAI_BASE_URL` only for OpenAI-compatible providers | `--base-url`, `--allow-insecure-base-url` | Custom API base URL. `OPENAI_BASE_URL` applies only when the resolved provider is `openai`, `ollama`, `lmstudio`, or a profile whose kind is one of those. A non-loopback `http://` URL is refused unless `--allow-insecure-base-url` is set. Loopback `http://` is always allowed. |
 | `max_turns` | `integer` | `40` | `FORGE_MAX_TURNS` | `--max-turns` | Maximum number of turns in an agent turn loop before stopping. |
 | `max_tokens` | `integer` | `4096` | `FORGE_MAX_TOKENS` | `--max-tokens` | Maximum token generation limit per model request. |
 | `permission_mode` | `string` | `"ask"` | `FORGE_PERMISSION_MODE` | `--mode` | Default permission policy: `ask`, `accept-edits`, `plan`, or `yolo`. |
 | `workspace_root` | `string` | `"."` | `FORGE_WORKSPACE_ROOT` | `--root` | Path to the workspace root directory. |
 | `theme` | `string` | `"dark"` | `FORGE_THEME` | `--theme` | TUI color theme: `dark`, `light`, `catppuccin-mocha`, `tokyo-night`, or `auto`. |
-| `system_prompt` | `string` | *(generated)* | `FORGE_SYSTEM_PROMPT` | `--system-prompt` | Custom system prompt override. If omitted, Forge generates one with OS and shell context. |
+| `system_prompt` | `string` | `""` | `FORGE_SYSTEM_PROMPT` | `--system-prompt` | Additional instructions appended after the built security prompt. They never replace the base prompt (SEC-1, shell guidance, and the project-guidance block). |
 | `shell` | `string` | *(auto-detected)* | `FORGE_SHELL` | `--shell` | Host shell executable (`pwsh`, `powershell.exe`, `cmd.exe`, `bash`, `zsh`, `sh`). |
 | `sessions` | `object` | `{}` | - | - | Session persistence and SQLite database settings. |
 | `sessions.enabled` | `boolean` | `true` | `FORGE_SESSIONS_ENABLED` | `--no-session` | Controls whether sessions are persisted to SQLite database. |
@@ -68,7 +68,6 @@ Example output:
   "permission_mode": "ask",
   "workspace_root": "D:\\Code\\forge",
   "theme": "dark",
-  "system_prompt": "You are Forge, a careful and capable coding agent.",
   "shell": "powershell.exe"
 }
 ```
@@ -100,7 +99,7 @@ forge --provider openai --model custom-model --base-url http://localhost:8000/v1
 ```
 
 > [!WARNING]
-> When `base_url` points to a non-loopback HTTP address, Forge emits a warning alerting that prompts, diffs, and credentials may be sent in cleartext across the network.
+> A non-loopback `http://` base URL is refused, because prompts and API keys would be sent in cleartext. Pass `--allow-insecure-base-url` to override. Loopback addresses (`localhost`, `127.0.0.1`, `::1`) are allowed. `OPENAI_BASE_URL` is not applied to Anthropic or Gemini.
 
 ---
 
@@ -115,16 +114,19 @@ To prevent repository-level attacks, Forge strictly enforces an allowlist on `<w
 ### Permitted Project Configuration Keys
 - `model`: Model selection for the repository.
 - `theme`: UI visual theme preference.
-- `permission_mode`: Restricted strictly to `"ask"`, `"accept-edits"`, or `"plan"`.
 - `max_turns` & `max_tokens`: Execution limits.
-- `system_prompt`: Project instructions.
 - `checkpoints`: Shadow git configuration.
+
+The built prompt (SEC-1 untrusted-data rule, operating environment, and tool guidance) is always the base of what the model receives. A `system_prompt` set in user config, `FORGE_SYSTEM_PROMPT`, or `--system-prompt` is appended after that base as additional instructions and never replaces it. `AGENTS.md` (or `CLAUDE.md`) from the workspace root is appended in a delimited block labeled as project-provided guidance that cannot change permissions, override safety rules, or authorize any action.
 
 ### Forbidden Keys (Ignored with Visible Warning)
 The following keys are **strictly forbidden** in `.forge/config.json` and will be discarded:
 - `shell`: **Ignored** (arbitrary code execution vector; can only be set via user config or `--shell`).
 - `base_url`: **Ignored** (credential exfiltration and SSRF vector; can only be set via user config or `--base-url`).
-- `yolo` or `permission_mode: "yolo"`: **Ignored** (repository files cannot disable human confirmation prompts).
+- `permission_mode` (any value, including `ask`, `accept-edits`, `plan`, and `yolo`): **Ignored** (a cloned repository must not grant a permission mode).
+- `system_prompt`: **Ignored** (a cloned repository must not set the system prompt).
+- `yolo`: **Ignored** (repository files cannot disable human confirmation prompts).
+- `audit`, `sessions`, and `redaction`: **Ignored** (a cloned repository cannot turn audit off, move the session database, or disable redaction).
 - Credentials (`*_api_key`, `token`, `secret`): **Ignored** (prevents committing secrets to git).
 
-Any ignored keys are listed under `ignored_project_keys` in `forge config` and logged to `stderr` with a `SEC-6` security alert.
+Any ignored keys are listed under `ignored_project_keys` in `forge config`, logged to `stderr` with a `SEC-6` security alert, and shown once in the TUI on the first screen.

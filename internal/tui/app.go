@@ -173,6 +173,7 @@ type Model struct {
 	ctrlCPressed          bool
 	wizard                *WizardState
 	sessionPicker         *SessionPicker
+	securityNotices       []string
 }
 
 // New creates a new TUI model bound to a Session.
@@ -231,6 +232,16 @@ func (m *Model) SetSessionStore(s *session.Store, noSession bool) {
 
 func (m *Model) SetSessionPicker(p *SessionPicker) {
 	m.sessionPicker = p
+}
+
+// SetSecurityNotices stores project-config warnings for a one-time notice
+// on the first screen and in the footer (F-007).
+func (m *Model) SetSecurityNotices(notices []string) {
+	if len(notices) == 0 {
+		m.securityNotices = nil
+		return
+	}
+	m.securityNotices = append([]string(nil), notices...)
 }
 
 func (m *Model) RestoreSession(data *session.ResumedSessionData) {
@@ -1165,6 +1176,20 @@ func renderWelcomeBanner(width int, version, provider, model, mode, branch strin
 	return styles.BorderBox.Width(boxWidth).Padding(0, 1).Render(body)
 }
 
+func renderSecurityNotices(notices []string, styles Styles) string {
+	if len(notices) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Security notice: project configuration ignored the following (SEC-6):\n")
+	for _, n := range notices {
+		b.WriteString("! ")
+		b.WriteString(n)
+		b.WriteString("\n")
+	}
+	return styles.ToolCardError.Render(strings.TrimRight(b.String(), "\n"))
+}
+
 func (m *Model) updateViewportContent() {
 	renderWidth := m.width
 	if renderWidth <= 0 {
@@ -1174,6 +1199,9 @@ func (m *Model) updateViewportContent() {
 	if len(m.items) == 0 && m.currentResponse == "" && m.pendingApproval == nil {
 		modeStr := string(m.session.Mode())
 		banner := renderWelcomeBanner(renderWidth, m.version, m.providerName, m.modelName, modeStr, m.branch, m.styles)
+		if notice := renderSecurityNotices(m.securityNotices, m.styles); notice != "" {
+			banner += "\n\n" + notice
+		}
 		m.viewport.SetContent(banner)
 		return
 	}
@@ -1307,6 +1335,12 @@ func (m Model) View() string {
 	}
 	if m.width > 0 && runewidth.StringWidth(StripANSI(help)) > m.width {
 		help = truncateVisual(help, m.width)
+	}
+
+	// One-time project-config notice. It stays on the first screen (empty
+	// transcript) and in the footer until the user sends a message.
+	if len(m.securityNotices) > 0 && len(m.items) == 0 {
+		help = m.styles.ToolCardError.Render("SEC-6: "+m.securityNotices[0]) + "\n" + help
 	}
 
 	return fmt.Sprintf(

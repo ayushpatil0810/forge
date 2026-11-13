@@ -81,6 +81,7 @@ func (l ListDir) Run(_ context.Context, input json.RawMessage) (Result, error) {
 
 	var entries []string
 	truncated := 0
+	skipped := 0
 
 	if !args.Recursive {
 		rawEntries, err := os.ReadDir(targetDir)
@@ -95,6 +96,13 @@ func (l ListDir) Run(_ context.Context, input json.RawMessage) (Result, error) {
 				continue
 			}
 			if IsIgnored(ign, relToRoot) {
+				continue
+			}
+			if _, err := ResolveInRoot(l.Root, filepath.ToSlash(relToRoot)); err != nil {
+				continue
+			}
+			if entryProtected(l.Root, filepath.ToSlash(relToRoot), fullPath) {
+				skipped++
 				continue
 			}
 			name := e.Name()
@@ -116,6 +124,19 @@ func (l ListDir) Run(_ context.Context, input json.RawMessage) (Result, error) {
 				return nil
 			}
 			if IsIgnored(ign, relToRoot) {
+				if d.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
+			}
+			if _, err := ResolveInRoot(l.Root, filepath.ToSlash(relToRoot)); err != nil {
+				if d.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
+			}
+			if entryProtected(l.Root, filepath.ToSlash(relToRoot), p) {
+				skipped++
 				if d.IsDir() {
 					return fs.SkipDir
 				}
@@ -149,7 +170,11 @@ func (l ListDir) Run(_ context.Context, input json.RawMessage) (Result, error) {
 	sort.Strings(entries)
 
 	if len(entries) == 0 {
-		return Result{Output: "(empty directory)"}, nil
+		out := "(empty directory)"
+		if skipped > 0 {
+			out += fmt.Sprintf("\n(skipped %d credential files)", skipped)
+		}
+		return Result{Output: out}, nil
 	}
 
 	var b strings.Builder
@@ -159,6 +184,9 @@ func (l ListDir) Run(_ context.Context, input json.RawMessage) (Result, error) {
 	}
 	if truncated > 0 {
 		fmt.Fprintf(&b, "... [%d more entries truncated; cap is %d entries. Use a more specific path to narrow down]\n", truncated, MaxListDirEntries)
+	}
+	if skipped > 0 {
+		fmt.Fprintf(&b, "(skipped %d credential files)\n", skipped)
 	}
 
 	return Result{Output: strings.TrimRight(b.String(), "\n")}, nil

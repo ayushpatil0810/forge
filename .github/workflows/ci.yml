@@ -21,7 +21,9 @@ jobs:
 
       - name: Set up MinGW (Windows)
         if: runner.os == 'Windows'
-        uses: egor-tukin/setup-mingw@v3
+        uses: egor-tensin/setup-mingw@v3
+        with:
+          platform: x64
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -71,6 +73,6 @@ jobs:
           go-version-input: 'stable'
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9.3.0
         with:
-          version: v1.64.5
+          version: v2.15.0

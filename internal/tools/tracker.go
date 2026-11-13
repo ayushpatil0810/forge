@@ -2,7 +2,6 @@ package tools
 
 import (
 	"path/filepath"
-	"strings"
 	"sync"
 )
 
@@ -40,42 +39,4 @@ func (t *ReadTracker) HasBeenRead(p string) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.reads[clean] || t.reads[filepath.ToSlash(clean)]
-}
-
-// IsProtectedPath checks if a relative or clean path targets protected files
-// like .git/, .env*, .ssh, .aws, or private keys / credential files (SPEC §3.3 P-6).
-func IsProtectedPath(p string) bool {
-	clean := filepath.ToSlash(filepath.Clean(p))
-	if clean == "." || clean == "/" {
-		return false
-	}
-
-	// Check path segments for protected directory names
-	parts := strings.Split(clean, "/")
-	for _, part := range parts {
-		if part == ".git" || part == ".ssh" || part == ".aws" {
-			return true
-		}
-	}
-
-	base := filepath.Base(clean)
-
-	// .env and .env.* files
-	if base == ".env" || strings.HasPrefix(base, ".env.") || strings.HasPrefix(base, ".env_") {
-		return true
-	}
-
-	// SSH / credential key files
-	if base == "id_rsa" || base == "id_ed25519" || base == "id_ecdsa" || base == "id_dsa" ||
-		base == "credentials" || base == "credentials.json" {
-		return true
-	}
-
-	// Sensitive certificates and private key extensions
-	ext := filepath.Ext(base)
-	if ext == ".pem" || ext == ".key" || ext == ".pfx" || ext == ".p12" {
-		return true
-	}
-
-	return false
 }

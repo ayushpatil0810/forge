@@ -37,18 +37,26 @@ var (
 	commit  = "none"
 	date    = "unknown"
 
-	rootFlag      string
-	demoFlag      bool
-	demoSpeedFlag float64
-	yesFlag       bool
-	yoloFlag      bool
-	providerFlag  string
-	modelFlag     string
-	baseURLFlag   string
-	shellFlag     string
-	themeFlag     string
-	resumeFlag    string
-	noSessionFlag bool
+	rootFlag                 string
+	demoFlag                 bool
+	demoSpeedFlag            float64
+	yesFlag                  bool
+	yoloFlag                 bool
+	providerFlag             string
+	modelFlag                string
+	baseURLFlag              string
+	shellFlag                string
+	themeFlag                string
+	resumeFlag               string
+	noSessionFlag            bool
+	systemPromptFlag         string
+	allowInsecureBaseURLFlag bool
+
+	// observeSystemPrompt records the prompt each CLI entry point would send.
+	// Tests set it; production leaves it nil.
+	observeSystemPrompt func(entryPoint, prompt string)
+	// stopAfterSystemPrompt returns before credentials, the network, or the TUI.
+	stopAfterSystemPrompt bool
 )
 
 // ExitCodeError indicates a specific process exit code required by SPEC §3.7.
@@ -124,6 +132,8 @@ func newRootCmd() *cobra.Command {
 	cmd.PersistentFlags().StringVar(&resumeFlag, "resume", "", "resume a previous session by ID (or open picker if omitted)")
 	cmd.PersistentFlags().Lookup("resume").NoOptDefVal = "last"
 	cmd.PersistentFlags().BoolVar(&noSessionFlag, "no-session", false, "ephemeral run without persisting session to SQLite")
+	cmd.PersistentFlags().StringVar(&systemPromptFlag, "system-prompt", "", "additional instructions appended after the built security prompt")
+	cmd.PersistentFlags().BoolVar(&allowInsecureBaseURLFlag, "allow-insecure-base-url", false, "allow a non-loopback http:// API base URL")
 
 	cmd.AddCommand(newRunCmd())
 	cmd.AddCommand(newConfigCmd())
@@ -183,12 +193,15 @@ func newConfigCmd() *cobra.Command {
 		Short: "Print the effective configuration with secrets redacted",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load(config.LoadOptions{
-				WorkspaceRoot: rootFlag,
-				Provider:      providerFlag,
-				Model:         modelFlag,
-				BaseURL:       baseURLFlag,
-				Shell:         shellFlag,
-				Theme:         themeFlag,
+				WorkspaceRoot:        rootFlag,
+				Provider:             providerFlag,
+				Model:                modelFlag,
+				BaseURL:              baseURLFlag,
+				Shell:                shellFlag,
+				Theme:                themeFlag,
+				SystemPrompt:         systemPromptFlag,
+				AllowInsecureBaseURL: allowInsecureBaseURLFlag,
+				SessionsEnabled:      sessionsEnabledFromFlag(),
 			})
 			if err != nil {
 				return ExitCodeError{Code: 2, Err: err}
@@ -684,20 +697,36 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 	}
 
 	cfg, err := config.Load(config.LoadOptions{
-		WorkspaceRoot:  rootFlag,
-		Provider:       providerFlag,
-		Model:          modelFlag,
-		BaseURL:        baseURLFlag,
-		Shell:          shellFlag,
-		Theme:          themeFlag,
-		MaxTurns:       maxTurns,
-		PermissionMode: permMode,
+		WorkspaceRoot:        rootFlag,
+		Provider:             providerFlag,
+		Model:                modelFlag,
+		BaseURL:              baseURLFlag,
+		Shell:                shellFlag,
+		Theme:                themeFlag,
+		SystemPrompt:         systemPromptFlag,
+		AllowInsecureBaseURL: allowInsecureBaseURLFlag,
+		SessionsEnabled:      sessionsEnabledFromFlag(),
+		MaxTurns:             maxTurns,
+		PermissionMode:       permMode,
 	})
 	if err != nil {
 		return ExitCodeError{Code: 2, Err: fmt.Errorf("loading config: %w", err)}
 	}
 	for _, w := range cfg.Warnings {
 		fmt.Fprintf(os.Stderr, "Warning: %s\n", w)
+	}
+
+	if demoFlag && rootFlag == "." {
+		if demoDir, err := setupDemoWorkspace(); err == nil {
+			cfg.WorkspaceRoot = demoDir
+		}
+	}
+	systemPrompt := finalizeSystemPrompt(cfg.WorkspaceRoot, cfg.SystemPrompt, cfg.Shell)
+	if observeSystemPrompt != nil {
+		observeSystemPrompt("run", systemPrompt)
+	}
+	if stopAfterSystemPrompt {
+		return nil
 	}
 
 	var store *session.Store
@@ -752,10 +781,6 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 	var toolRegistry *tools.Registry
 
 	if demoFlag {
-		demoDir, err := setupDemoWorkspace()
-		if err == nil && rootFlag == "." {
-			cfg.WorkspaceRoot = demoDir
-		}
 		provider = mock.New(
 			mock.Turn{
 				mock.Text("I will inspect the failing tests in this repository using `bash`.\n"),
@@ -797,12 +822,6 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 		provider = p
 		sh := tools.DetectShell(cfg.Shell)
 		toolRegistry = tools.DefaultTools(cfg.WorkspaceRoot, sh)
-	}
-
-	sh := tools.DetectShell(cfg.Shell)
-	systemPrompt := cfg.SystemPrompt
-	if systemPrompt == "" {
-		systemPrompt = agent.BuildSystemPrompt(cfg.WorkspaceRoot, sh)
 	}
 
 	resolvedMode := permission.ModeDefault
@@ -1058,18 +1077,34 @@ eventLoop:
 
 func runInteractive(ctx context.Context) error {
 	cfg, err := config.Load(config.LoadOptions{
-		WorkspaceRoot: rootFlag,
-		Provider:      providerFlag,
-		Model:         modelFlag,
-		BaseURL:       baseURLFlag,
-		Shell:         shellFlag,
-		Theme:         themeFlag,
+		WorkspaceRoot:        rootFlag,
+		Provider:             providerFlag,
+		Model:                modelFlag,
+		BaseURL:              baseURLFlag,
+		Shell:                shellFlag,
+		Theme:                themeFlag,
+		SystemPrompt:         systemPromptFlag,
+		AllowInsecureBaseURL: allowInsecureBaseURLFlag,
+		SessionsEnabled:      sessionsEnabledFromFlag(),
 	})
 	if err != nil {
 		return ExitCodeError{Code: 2, Err: fmt.Errorf("loading config: %w", err)}
 	}
 	for _, w := range cfg.Warnings {
 		fmt.Fprintf(os.Stderr, "Warning: %s\n", w)
+	}
+
+	if demoFlag && rootFlag == "." {
+		if demoDir, err := setupDemoWorkspace(); err == nil {
+			cfg.WorkspaceRoot = demoDir
+		}
+	}
+	systemPrompt := finalizeSystemPrompt(cfg.WorkspaceRoot, cfg.SystemPrompt, cfg.Shell)
+	if observeSystemPrompt != nil {
+		observeSystemPrompt("interactive", systemPrompt)
+	}
+	if stopAfterSystemPrompt {
+		return nil
 	}
 
 	var store *session.Store
@@ -1139,10 +1174,6 @@ func runInteractive(ctx context.Context) error {
 	var needsWizard bool
 
 	if demoFlag {
-		demoDir, err := setupDemoWorkspace()
-		if err == nil && rootFlag == "." {
-			cfg.WorkspaceRoot = demoDir
-		}
 		providerName = "mock"
 		modelName = "demo"
 		provider = mock.New(
@@ -1191,12 +1222,6 @@ func runInteractive(ctx context.Context) error {
 		provider = p
 		sh := tools.DetectShell(cfg.Shell)
 		toolRegistry = tools.DefaultTools(cfg.WorkspaceRoot, sh)
-	}
-
-	sh := tools.DetectShell(cfg.Shell)
-	systemPrompt := cfg.SystemPrompt
-	if systemPrompt == "" {
-		systemPrompt = agent.BuildSystemPrompt(cfg.WorkspaceRoot, sh)
 	}
 
 	permMode := permission.ModeDefault
@@ -1275,6 +1300,7 @@ func runInteractive(ctx context.Context) error {
 		th = tui.DarkTheme()
 	}
 	m := tui.New(s, th)
+	m.SetSecurityNotices(cfg.Warnings)
 	m.SetProviderInfo(providerName, modelName)
 	m.SetBaseURL(cfg.BaseURL)
 	m.SetWorkspaceRoot(cfg.WorkspaceRoot)
@@ -1292,6 +1318,22 @@ func runInteractive(ctx context.Context) error {
 		return ExitCodeError{Code: 1, Err: fmt.Errorf("running TUI: %w", err)}
 	}
 	return nil
+}
+
+// finalizeSystemPrompt is what both CLI entry points send to the model.
+// The built security prompt is always the base. A user-set system_prompt
+// is appended after it and never replaces it (F-006).
+func sessionsEnabledFromFlag() *bool {
+	if !noSessionFlag {
+		return nil
+	}
+	enabled := false
+	return &enabled
+}
+
+func finalizeSystemPrompt(workspace, userPrompt, shell string) string {
+	sh := tools.DetectShell(shell)
+	return agent.ComposeSystemPrompt(workspace, userPrompt, sh)
 }
 
 func main() {

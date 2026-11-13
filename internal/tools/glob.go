@@ -83,7 +83,8 @@ func (g Glob) Run(_ context.Context, input json.RawMessage) (Result, error) {
 		if IsIgnored(ign, m) {
 			continue
 		}
-		if IsCredentialPath(m) {
+		full := filepath.Join(g.Root, filepath.FromSlash(m))
+		if entryProtected(g.Root, m, full) {
 			skippedCredentials++
 			continue
 		}

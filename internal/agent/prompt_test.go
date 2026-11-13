@@ -30,7 +30,7 @@ func TestBuildSystemPromptWithAgentsMD(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte(content), 0o644)
 
 	prompt := agent.BuildSystemPrompt(dir)
-	if !strings.Contains(prompt, "Project Instructions (from AGENTS.md)") {
+	if !strings.Contains(prompt, "Project-provided guidance (AGENTS.md)") {
 		t.Errorf("expected AGENTS.md section, got:\n%s", prompt)
 	}
 	if !strings.Contains(prompt, content) {
@@ -44,7 +44,7 @@ func TestBuildSystemPromptFallbackToClaudeMD(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(content), 0o644)
 
 	prompt := agent.BuildSystemPrompt(dir)
-	if !strings.Contains(prompt, "Project Instructions (from CLAUDE.md)") {
+	if !strings.Contains(prompt, "Project-provided guidance (CLAUDE.md)") {
 		t.Errorf("expected CLAUDE.md section, got:\n%s", prompt)
 	}
 	if !strings.Contains(prompt, content) {

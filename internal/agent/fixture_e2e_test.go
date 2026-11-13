@@ -41,7 +41,7 @@ func TestExplainRepoStructureEndToEnd(t *testing.T) {
 	}
 
 	systemPrompt := agent.BuildSystemPrompt(fixtureDir)
-	if !strings.Contains(systemPrompt, "Project Instructions (from AGENTS.md)") {
+	if !strings.Contains(systemPrompt, "Project-provided guidance (AGENTS.md)") {
 		t.Fatalf("expected AGENTS.md instructions in system prompt")
 	}
 

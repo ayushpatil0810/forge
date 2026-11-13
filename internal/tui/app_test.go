@@ -360,3 +360,25 @@ func TestTUIApprovalSessionAllow(t *testing.T) {
 		t.Fatalf("expected dangerous approval to remain active after 'a', got:\n%s", viewAfterDangA)
 	}
 }
+
+func TestTUISecurityNoticeOnFirstScreen(t *testing.T) {
+	p := mock.New()
+	s := agent.NewLocal(agent.Config{Provider: p})
+	defer s.Close()
+
+	m := tui.New(s, tui.DarkTheme())
+	m.SetProviderInfo("anthropic", "claude-sonnet-5-5")
+	notice := `SEC-6: Forbidden key "permission_mode" in project config ignored (a cloned repository must not grant a permission mode)`
+	m.SetSecurityNotices([]string{notice})
+
+	newM, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m = newM.(tui.Model)
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "permission_mode") {
+		t.Fatalf("first screen missing project-config warning:\n%s", view)
+	}
+	if !strings.Contains(view, "SEC-6") {
+		t.Fatalf("first screen missing SEC-6 notice:\n%s", view)
+	}
+}

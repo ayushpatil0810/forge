@@ -59,7 +59,7 @@ func (r ReadFile) NeedsApproval(input json.RawMessage) ApprovalRequest {
 	if err := json.Unmarshal(input, &args); err != nil {
 		return ApprovalRequest{}
 	}
-	if IsCredentialPath(args.Path) {
+	if protectedPath(r.Root, args.Path, "") {
 		return ApprovalRequest{
 			Description: fmt.Sprintf("Read credential file %s", args.Path),
 			IsProtected: true,

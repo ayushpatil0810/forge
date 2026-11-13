@@ -121,7 +121,7 @@ func (g Grep) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 		if IsIgnored(ign, relSlash) {
 			return nil
 		}
-		if IsCredentialPath(relSlash) {
+		if entryProtected(g.Root, relSlash, fullPath) {
 			skippedCredentials++
 			return nil
 		}
@@ -192,12 +192,20 @@ func (g Grep) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 				return nil
 			}
 
-			if p != g.Root && IsCredentialPath(relSlash) {
-				skippedCredentials++
-				if d.IsDir() {
-					return fs.SkipDir
+			if p != g.Root {
+				if _, err := ResolveInRoot(g.Root, relSlash); err != nil {
+					if d.IsDir() {
+						return fs.SkipDir
+					}
+					return nil
 				}
-				return nil
+				if entryProtected(g.Root, relSlash, p) {
+					skippedCredentials++
+					if d.IsDir() {
+						return fs.SkipDir
+					}
+					return nil
+				}
 			}
 
 			if d.IsDir() {
