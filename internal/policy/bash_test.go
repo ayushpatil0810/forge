@@ -148,14 +148,11 @@ func FuzzBashSplitter(f *testing.F) {
 			t.Fatalf("non-nil raw segments produced nil cleaned segments")
 		}
 
-		// If string contains unquoted redirection or substitution, it MUST NOT be classified as simple non-opaque
+		// A string with an unquoted metacharacter is never classified as simple.
 		for _, m := range metachars {
-			if strings.Contains(s, m) {
-				// If the metacharacter is outside quotes, it cannot be a simple single command without opacity or segmentation
-				if !strings.Contains(s, "\"") && !strings.Contains(s, "'") {
-					if !analysis.IsOpaque && len(analysis.Segments) <= 1 {
-						t.Fatalf("input %q containing unquoted metachar %q was incorrectly classified as simple single segment", s, m)
-					}
+			if strings.Contains(s, m) && !strings.Contains(s, "\"") && !strings.Contains(s, "'") {
+				if analysis.IsSimple {
+					t.Fatalf("input %q containing unquoted metachar %q was incorrectly classified as simple", s, m)
 				}
 			}
 		}
