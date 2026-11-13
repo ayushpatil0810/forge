@@ -150,7 +150,9 @@ func DefaultConfig() Config {
 		PermissionMode: "ask",
 		WorkspaceRoot:  ".",
 		Theme:          "dark",
-		SystemPrompt:   "You are Forge, a careful and capable coding agent.",
+		// SystemPrompt stays empty. The CLI always builds the security prompt
+		// and appends a user-set system_prompt after it (F-006). A non-empty
+		// default here used to replace that built prompt entirely.
 	}
 }
 

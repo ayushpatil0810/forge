@@ -32,7 +32,7 @@ Every configuration option supported by Forge:
 | `permission_mode` | `string` | `"ask"` | `FORGE_PERMISSION_MODE` | `--mode` | Default permission policy: `ask`, `accept-edits`, `plan`, or `yolo`. |
 | `workspace_root` | `string` | `"."` | `FORGE_WORKSPACE_ROOT` | `--root` | Path to the workspace root directory. |
 | `theme` | `string` | `"dark"` | `FORGE_THEME` | `--theme` | TUI color theme: `dark`, `light`, `catppuccin-mocha`, `tokyo-night`, or `auto`. |
-| `system_prompt` | `string` | *(generated)* | `FORGE_SYSTEM_PROMPT` | `--system-prompt` | Custom system prompt override. If omitted, Forge generates one with OS and shell context. |
+| `system_prompt` | `string` | `""` | `FORGE_SYSTEM_PROMPT` | `--system-prompt` | Additional instructions appended after the built security prompt. They never replace the base prompt (SEC-1, shell guidance, and the project-guidance block). |
 | `shell` | `string` | *(auto-detected)* | `FORGE_SHELL` | `--shell` | Host shell executable (`pwsh`, `powershell.exe`, `cmd.exe`, `bash`, `zsh`, `sh`). |
 | `sessions` | `object` | `{}` | - | - | Session persistence and SQLite database settings. |
 | `sessions.enabled` | `boolean` | `true` | `FORGE_SESSIONS_ENABLED` | `--no-session` | Controls whether sessions are persisted to SQLite database. |
@@ -68,7 +68,6 @@ Example output:
   "permission_mode": "ask",
   "workspace_root": "D:\\Code\\forge",
   "theme": "dark",
-  "system_prompt": "You are Forge, a careful and capable coding agent.",
   "shell": "powershell.exe"
 }
 ```
@@ -117,8 +116,9 @@ To prevent repository-level attacks, Forge strictly enforces an allowlist on `<w
 - `theme`: UI visual theme preference.
 - `permission_mode`: Restricted strictly to `"ask"`, `"accept-edits"`, or `"plan"`.
 - `max_turns` & `max_tokens`: Execution limits.
-- `system_prompt`: Project instructions.
 - `checkpoints`: Shadow git configuration.
+
+The built prompt (SEC-1 untrusted-data rule, operating environment, and tool guidance) is always the base of what the model receives. A `system_prompt` set in user config, `FORGE_SYSTEM_PROMPT`, or `--system-prompt` is appended after that base as additional instructions and never replaces it. `AGENTS.md` (or `CLAUDE.md`) from the workspace root is appended in a delimited block labeled as project-provided guidance that cannot change permissions, override safety rules, or authorize any action.
 
 ### Forbidden Keys (Ignored with Visible Warning)
 The following keys are **strictly forbidden** in `.forge/config.json` and will be discarded:
