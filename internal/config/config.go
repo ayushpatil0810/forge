@@ -150,6 +150,11 @@ type LoadOptions struct {
 	SystemPrompt         string
 	Shell                string
 	AllowInsecureBaseURL bool
+	// Flag layer. Nil leaves the value from lower layers.
+	AuditEnabled        *bool
+	AuditRequired       *bool
+	SessionsEnabled     *bool
+	RedactionToolOutput *bool
 }
 
 // DefaultModelForProvider returns the sensible default model ID for a given provider.
@@ -421,6 +426,44 @@ func merge(dst *Config, src Config) {
 	if len(src.Providers) > 0 {
 		dst.Providers = append(dst.Providers, src.Providers...)
 	}
+	if src.Sessions != nil {
+		c := *src.Sessions
+		c.Enabled = cloneBool(src.Sessions.Enabled)
+		dst.Sessions = &c
+	}
+	if src.Audit != nil {
+		c := *src.Audit
+		c.Enabled = cloneBool(src.Audit.Enabled)
+		dst.Audit = &c
+	}
+	if src.Redaction != nil {
+		c := *src.Redaction
+		c.ToolOutput = cloneBool(src.Redaction.ToolOutput)
+		dst.Redaction = &c
+	}
+}
+
+func cloneBool(p *bool) *bool {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
+func envBool(key string) (bool, bool) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return false, false
+	}
+	switch strings.ToLower(raw) {
+	case "1", "true", "yes", "on":
+		return true, true
+	case "0", "false", "no", "off":
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 func applyEnv(dst *Config) {
@@ -463,6 +506,24 @@ func applyEnv(dst *Config) {
 		dst.BaseURL = v
 		dst.baseURLRank = rankBaseEnvForge
 	}
+	if v, ok := envBool("FORGE_AUDIT_ENABLED"); ok {
+		if dst.Audit == nil {
+			dst.Audit = &AuditConfig{}
+		}
+		dst.Audit.Enabled = cloneBool(&v)
+	}
+	if v, ok := envBool("FORGE_AUDIT_REQUIRED"); ok {
+		if dst.Audit == nil {
+			dst.Audit = &AuditConfig{}
+		}
+		dst.Audit.Required = v
+	}
+	if v, ok := envBool("FORGE_SESSIONS_ENABLED"); ok {
+		if dst.Sessions == nil {
+			dst.Sessions = &SessionsConfig{}
+		}
+		dst.Sessions.Enabled = cloneBool(&v)
+	}
 }
 
 func applyOptions(dst *Config, opts LoadOptions) {
@@ -500,5 +561,29 @@ func applyOptions(dst *Config, opts LoadOptions) {
 	}
 	if opts.Shell != "" {
 		dst.Shell = opts.Shell
+	}
+	if opts.AuditEnabled != nil {
+		if dst.Audit == nil {
+			dst.Audit = &AuditConfig{}
+		}
+		dst.Audit.Enabled = cloneBool(opts.AuditEnabled)
+	}
+	if opts.AuditRequired != nil {
+		if dst.Audit == nil {
+			dst.Audit = &AuditConfig{}
+		}
+		dst.Audit.Required = *opts.AuditRequired
+	}
+	if opts.SessionsEnabled != nil {
+		if dst.Sessions == nil {
+			dst.Sessions = &SessionsConfig{}
+		}
+		dst.Sessions.Enabled = cloneBool(opts.SessionsEnabled)
+	}
+	if opts.RedactionToolOutput != nil {
+		if dst.Redaction == nil {
+			dst.Redaction = &RedactionConfig{}
+		}
+		dst.Redaction.ToolOutput = cloneBool(opts.RedactionToolOutput)
 	}
 }

@@ -201,6 +201,7 @@ func newConfigCmd() *cobra.Command {
 				Theme:                themeFlag,
 				SystemPrompt:         systemPromptFlag,
 				AllowInsecureBaseURL: allowInsecureBaseURLFlag,
+				SessionsEnabled:      sessionsEnabledFromFlag(),
 			})
 			if err != nil {
 				return ExitCodeError{Code: 2, Err: err}
@@ -704,6 +705,7 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 		Theme:                themeFlag,
 		SystemPrompt:         systemPromptFlag,
 		AllowInsecureBaseURL: allowInsecureBaseURLFlag,
+		SessionsEnabled:      sessionsEnabledFromFlag(),
 		MaxTurns:             maxTurns,
 		PermissionMode:       permMode,
 	})
@@ -1083,6 +1085,7 @@ func runInteractive(ctx context.Context) error {
 		Theme:                themeFlag,
 		SystemPrompt:         systemPromptFlag,
 		AllowInsecureBaseURL: allowInsecureBaseURLFlag,
+		SessionsEnabled:      sessionsEnabledFromFlag(),
 	})
 	if err != nil {
 		return ExitCodeError{Code: 2, Err: fmt.Errorf("loading config: %w", err)}
@@ -1320,6 +1323,14 @@ func runInteractive(ctx context.Context) error {
 // finalizeSystemPrompt is what both CLI entry points send to the model.
 // The built security prompt is always the base. A user-set system_prompt
 // is appended after it and never replaces it (F-006).
+func sessionsEnabledFromFlag() *bool {
+	if !noSessionFlag {
+		return nil
+	}
+	enabled := false
+	return &enabled
+}
+
 func finalizeSystemPrompt(workspace, userPrompt, shell string) string {
 	sh := tools.DetectShell(shell)
 	return agent.ComposeSystemPrompt(workspace, userPrompt, sh)
