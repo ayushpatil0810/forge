@@ -13,7 +13,7 @@ func statIdentity(path string) (fileKey, uint64, error) {
 	if err != nil {
 		return fileKey{}, 0, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var info windows.ByHandleFileInformation
 	if err := windows.GetFileInformationByHandle(windows.Handle(f.Fd()), &info); err != nil {
 		return fileKey{}, 0, err
