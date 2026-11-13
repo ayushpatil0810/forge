@@ -3,6 +3,8 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -55,6 +57,9 @@ type Config struct {
 	Providers          []ProviderProfile `json:"providers,omitempty"`
 	IgnoredProjectKeys map[string]string `json:"ignored_project_keys,omitempty"`
 	Warnings           []string          `json:"-"`
+	// baseURLRank records which layer set BaseURL so OPENAI_BASE_URL cannot
+	// override FORGE_BASE_URL or a flag, and is applied only for compatible providers.
+	baseURLRank int
 }
 
 // Redacted returns a copy of Config suitable for logging or display with warnings detached.
@@ -87,39 +92,64 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// CheckInsecureBaseURL inspects custom base URLs and returns a visible warning if
-// API keys are being transmitted in cleartext over insecure HTTP to non-loopback hosts.
+const (
+	rankBaseDefault = iota
+	rankBaseUser
+	rankBaseEnvOpenAI
+	rankBaseEnvForge
+	rankBaseFlag
+)
+
+// CheckInsecureBaseURL inspects custom base URLs and returns a message when
+// API keys would be sent in cleartext over HTTP to a non-loopback host.
+// Loopback http (localhost, 127.0.0.0/8, ::1) is allowed. Empty and https are allowed.
 func CheckInsecureBaseURL(baseURL string) string {
 	raw := strings.TrimSpace(baseURL)
-	if strings.HasPrefix(strings.ToLower(raw), "http://") {
-		host := strings.TrimPrefix(strings.ToLower(raw), "http://")
-		if slashIdx := strings.Index(host, "/"); slashIdx != -1 {
-			host = host[:slashIdx]
-		}
-		if colonIdx := strings.Index(host, ":"); colonIdx != -1 {
-			host = host[:colonIdx]
-		}
-		if host != "localhost" && host != "127.0.0.1" && host != "::1" && host != "[::1]" {
-			return fmt.Sprintf("SEC-6: Custom base_url %q transmits API keys in cleartext over insecure HTTP. Use HTTPS or tunnel over a secure connection.", baseURL)
-		}
+	if raw == "" || !strings.HasPrefix(strings.ToLower(raw), "http://") {
+		return ""
 	}
-	return ""
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return fmt.Sprintf("SEC-6: Custom base_url %q is not a valid URL.", baseURL)
+	}
+	if isLoopbackHost(u.Hostname()) {
+		return ""
+	}
+	return fmt.Sprintf("SEC-6: Custom base_url %q transmits API keys in cleartext over insecure HTTP. Use HTTPS or a loopback address.", baseURL)
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(strings.TrimSpace(host), "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func isOpenAICompatible(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "openai", "ollama", "lmstudio":
+		return true
+	default:
+		return false
+	}
 }
 
 // LoadOptions represents caller/CLI overrides and path overrides.
 type LoadOptions struct {
-	UserConfigFile    string
-	ProjectConfigFile string
-	WorkspaceRoot     string
-	Provider          string
-	Model             string
-	BaseURL           string
-	PermissionMode    string
-	MaxTurns          int
-	MaxTokens         int
-	Theme             string
-	SystemPrompt      string
-	Shell             string
+	UserConfigFile       string
+	ProjectConfigFile    string
+	WorkspaceRoot        string
+	Provider             string
+	Model                string
+	BaseURL              string
+	PermissionMode       string
+	MaxTurns             int
+	MaxTokens            int
+	Theme                string
+	SystemPrompt         string
+	Shell                string
+	AllowInsecureBaseURL bool
 }
 
 // DefaultModelForProvider returns the sensible default model ID for a given provider.
@@ -227,9 +257,18 @@ func Load(opts LoadOptions) (Config, error) {
 		}
 	}
 
-	// Check for cleartext API key transmission over non-loopback HTTP
-	if warn := CheckInsecureBaseURL(cfg.BaseURL); warn != "" {
-		cfg.Warnings = append(cfg.Warnings, warn)
+	// OPENAI_BASE_URL retargets only OpenAI and OpenAI-compatible presets.
+	// It loses to FORGE_BASE_URL and to an explicit base URL flag (F-010).
+	if v := strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")); v != "" && isOpenAICompatible(cfg.Provider) && cfg.baseURLRank < rankBaseEnvForge {
+		cfg.BaseURL = v
+		cfg.baseURLRank = rankBaseEnvOpenAI
+	}
+
+	if msg := CheckInsecureBaseURL(cfg.BaseURL); msg != "" {
+		if !opts.AllowInsecureBaseURL {
+			return cfg, fmt.Errorf("%s Pass --allow-insecure-base-url to use it anyway", msg)
+		}
+		cfg.Warnings = append(cfg.Warnings, msg)
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -356,6 +395,7 @@ func merge(dst *Config, src Config) {
 	}
 	if src.BaseURL != "" {
 		dst.BaseURL = src.BaseURL
+		dst.baseURLRank = rankBaseUser
 	}
 	if src.MaxTurns > 0 {
 		dst.MaxTurns = src.MaxTurns
@@ -421,8 +461,7 @@ func applyEnv(dst *Config) {
 	}
 	if v := os.Getenv("FORGE_BASE_URL"); v != "" {
 		dst.BaseURL = v
-	} else if v := os.Getenv("OPENAI_BASE_URL"); v != "" {
-		dst.BaseURL = v
+		dst.baseURLRank = rankBaseEnvForge
 	}
 }
 
@@ -439,6 +478,7 @@ func applyOptions(dst *Config, opts LoadOptions) {
 	}
 	if opts.BaseURL != "" {
 		dst.BaseURL = opts.BaseURL
+		dst.baseURLRank = rankBaseFlag
 	}
 	if opts.MaxTurns > 0 {
 		dst.MaxTurns = opts.MaxTurns

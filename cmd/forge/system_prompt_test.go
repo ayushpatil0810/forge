@@ -22,6 +22,7 @@ func resetCLIFlags() {
 	resumeFlag = ""
 	noSessionFlag = false
 	systemPromptFlag = ""
+	allowInsecureBaseURLFlag = false
 	observeSystemPrompt = nil
 	stopAfterSystemPrompt = false
 }

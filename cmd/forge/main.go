@@ -37,19 +37,20 @@ var (
 	commit  = "none"
 	date    = "unknown"
 
-	rootFlag         string
-	demoFlag         bool
-	demoSpeedFlag    float64
-	yesFlag          bool
-	yoloFlag         bool
-	providerFlag     string
-	modelFlag        string
-	baseURLFlag      string
-	shellFlag        string
-	themeFlag        string
-	resumeFlag       string
-	noSessionFlag    bool
-	systemPromptFlag string
+	rootFlag                 string
+	demoFlag                 bool
+	demoSpeedFlag            float64
+	yesFlag                  bool
+	yoloFlag                 bool
+	providerFlag             string
+	modelFlag                string
+	baseURLFlag              string
+	shellFlag                string
+	themeFlag                string
+	resumeFlag               string
+	noSessionFlag            bool
+	systemPromptFlag         string
+	allowInsecureBaseURLFlag bool
 
 	// observeSystemPrompt records the prompt each CLI entry point would send.
 	// Tests set it; production leaves it nil.
@@ -132,6 +133,7 @@ func newRootCmd() *cobra.Command {
 	cmd.PersistentFlags().Lookup("resume").NoOptDefVal = "last"
 	cmd.PersistentFlags().BoolVar(&noSessionFlag, "no-session", false, "ephemeral run without persisting session to SQLite")
 	cmd.PersistentFlags().StringVar(&systemPromptFlag, "system-prompt", "", "additional instructions appended after the built security prompt")
+	cmd.PersistentFlags().BoolVar(&allowInsecureBaseURLFlag, "allow-insecure-base-url", false, "allow a non-loopback http:// API base URL")
 
 	cmd.AddCommand(newRunCmd())
 	cmd.AddCommand(newConfigCmd())
@@ -191,13 +193,14 @@ func newConfigCmd() *cobra.Command {
 		Short: "Print the effective configuration with secrets redacted",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load(config.LoadOptions{
-				WorkspaceRoot: rootFlag,
-				Provider:      providerFlag,
-				Model:         modelFlag,
-				BaseURL:       baseURLFlag,
-				Shell:         shellFlag,
-				Theme:         themeFlag,
-				SystemPrompt:  systemPromptFlag,
+				WorkspaceRoot:        rootFlag,
+				Provider:             providerFlag,
+				Model:                modelFlag,
+				BaseURL:              baseURLFlag,
+				Shell:                shellFlag,
+				Theme:                themeFlag,
+				SystemPrompt:         systemPromptFlag,
+				AllowInsecureBaseURL: allowInsecureBaseURLFlag,
 			})
 			if err != nil {
 				return ExitCodeError{Code: 2, Err: err}
@@ -693,15 +696,16 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 	}
 
 	cfg, err := config.Load(config.LoadOptions{
-		WorkspaceRoot:  rootFlag,
-		Provider:       providerFlag,
-		Model:          modelFlag,
-		BaseURL:        baseURLFlag,
-		Shell:          shellFlag,
-		Theme:          themeFlag,
-		SystemPrompt:   systemPromptFlag,
-		MaxTurns:       maxTurns,
-		PermissionMode: permMode,
+		WorkspaceRoot:        rootFlag,
+		Provider:             providerFlag,
+		Model:                modelFlag,
+		BaseURL:              baseURLFlag,
+		Shell:                shellFlag,
+		Theme:                themeFlag,
+		SystemPrompt:         systemPromptFlag,
+		AllowInsecureBaseURL: allowInsecureBaseURLFlag,
+		MaxTurns:             maxTurns,
+		PermissionMode:       permMode,
 	})
 	if err != nil {
 		return ExitCodeError{Code: 2, Err: fmt.Errorf("loading config: %w", err)}
@@ -1071,13 +1075,14 @@ eventLoop:
 
 func runInteractive(ctx context.Context) error {
 	cfg, err := config.Load(config.LoadOptions{
-		WorkspaceRoot: rootFlag,
-		Provider:      providerFlag,
-		Model:         modelFlag,
-		BaseURL:       baseURLFlag,
-		Shell:         shellFlag,
-		Theme:         themeFlag,
-		SystemPrompt:  systemPromptFlag,
+		WorkspaceRoot:        rootFlag,
+		Provider:             providerFlag,
+		Model:                modelFlag,
+		BaseURL:              baseURLFlag,
+		Shell:                shellFlag,
+		Theme:                themeFlag,
+		SystemPrompt:         systemPromptFlag,
+		AllowInsecureBaseURL: allowInsecureBaseURLFlag,
 	})
 	if err != nil {
 		return ExitCodeError{Code: 2, Err: fmt.Errorf("loading config: %w", err)}

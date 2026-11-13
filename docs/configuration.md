@@ -26,7 +26,7 @@ Every configuration option supported by Forge:
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `provider` | `string` | `"anthropic"` | `FORGE_PROVIDER` | `--provider` | Default LLM provider (`anthropic`, `openai`, `gemini`, `mock`). |
 | `model` | `string` | `"claude-sonnet-5-5"` | `FORGE_MODEL` | `--model` | Model identifier to use. Defaults to provider's flagship model. |
-| `base_url` | `string` | `""` | `FORGE_BASE_URL` / `OPENAI_BASE_URL` | `--base-url` | Custom API base URL (e.g. for Ollama, vLLM, or OpenAI-compatible proxies). |
+| `base_url` | `string` | `""` | `FORGE_BASE_URL`; `OPENAI_BASE_URL` only for OpenAI-compatible providers | `--base-url`, `--allow-insecure-base-url` | Custom API base URL. `OPENAI_BASE_URL` applies only when the resolved provider is `openai`, `ollama`, `lmstudio`, or a profile whose kind is one of those. A non-loopback `http://` URL is refused unless `--allow-insecure-base-url` is set. Loopback `http://` is always allowed. |
 | `max_turns` | `integer` | `40` | `FORGE_MAX_TURNS` | `--max-turns` | Maximum number of turns in an agent turn loop before stopping. |
 | `max_tokens` | `integer` | `4096` | `FORGE_MAX_TOKENS` | `--max-tokens` | Maximum token generation limit per model request. |
 | `permission_mode` | `string` | `"ask"` | `FORGE_PERMISSION_MODE` | `--mode` | Default permission policy: `ask`, `accept-edits`, `plan`, or `yolo`. |
@@ -99,7 +99,7 @@ forge --provider openai --model custom-model --base-url http://localhost:8000/v1
 ```
 
 > [!WARNING]
-> When `base_url` points to a non-loopback HTTP address, Forge emits a warning alerting that prompts, diffs, and credentials may be sent in cleartext across the network.
+> A non-loopback `http://` base URL is refused, because prompts and API keys would be sent in cleartext. Pass `--allow-insecure-base-url` to override. Loopback addresses (`localhost`, `127.0.0.1`, `::1`) are allowed. `OPENAI_BASE_URL` is not applied to Anthropic or Gemini.
 
 ---
 
