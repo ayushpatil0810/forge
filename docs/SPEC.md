@@ -98,11 +98,11 @@ Priority: **P0** = MVP, **P1** = v1.0, **P2** = post-v1.
 | --- | ------------------------------------------------------------------------------------------------ | --- |
 | P-1 | Modes: `ask` (default), `accept-edits`, `plan` (read-only), `yolo` (no prompts, explicit opt-in) | P0  |
 | P-2 | Approval prompt shows the exact action (diff for edits, command for bash)                        | P0  |
-| P-3 | User choices: allow once (`[y]`), allow for session (`[a]`, never offered for dangerous commands), always allow with user policy persistence (`[A]`, preview card), deny (`[n]`/`[d]`), deny with feedback (`[f]`, returned to model up to 500 chars), diff preview (`[e]`), mode switch (`[Tab]`). In headless mode, unanswerable approvals are auto-denied (dangerous commands require `--yolo`; protected paths require manual approval; edits/writes require `--yes` or `--yolo`). | P1  |
+| P-3 | User choices: allow once (`[y]`), allow for session (`[a]`, never offered for dangerous commands), always allow with user policy persistence (`[A]`, preview card; saves a narrow rule and does not approve every later call of that tool), deny (`[n]`/`[d]`), deny with feedback (`[f]`, returned to model up to 500 chars), diff preview (`[e]`). Tab switches permission mode only when no approval card is open. In headless mode, unanswerable approvals are auto-denied. Safety-floor commands (dangerous commands, protected paths) are denied even with `--yolo`. Ordinary edits and commands require `--yes` or `--yolo`. | P1  |
 | P-4 | Policy files: user policy (`~/.forge/policy.json`) and project policy (`<workspace>/.forge/policy.json`) with allow/deny/ask rules using patterns, e.g. `bash(go test:*)`, `edit(docs/**)`. Project policy allow rules are strictly ignored with a warning (untrusted repository defense). | P1  |
 | P-5 | Deny rules always override allow rules across all modes including `yolo`                              | P1  |
 | P-6 | Protected paths (`.git/`, `.env*`, `.ssh/`, `.aws/`, `id_rsa*`, `*.pem`, `*.key`, `*.pfx`, `*.p12`, `credentials`) always prompt for approval in `ask`, `accept-edits`, and `yolo` modes; reads of credential files prompt in all modes (including `plan`); denied in headless mode. | P1  |
-| P-7 | Cryptographic tamper-evident audit log of every tool call, decision, and result (JSONL in user data dir with per-session SHA-256 hash chains, `forge audit verify`) | P1  |
+| P-7 | Audit log of every tool call, decision, and result (JSONL, per-session SHA-256 hash chains, a state file that detects a truncated tail, `forge audit verify`). Tamper-evident against edits, deletions and truncation, but not against an attacker who can rewrite both the log and its state file. | P1  |
 
 ### 3.4 Sessions, Checkpoints, and Memory
 

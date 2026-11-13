@@ -35,7 +35,7 @@
 
 ## Security review fixes
 
-Review of commit `caeb2af`, branch `fix/security-1`. Status is what the regression tests on this branch show.
+Part 1 (merged as `2427ffa`) covered F-006, F-007, F-008, F-010, F-021, F-015, F-014, F-001, F-002, and F-017. Part 2 is on `fix/security-2`. Status is what the regression tests show.
 
 | F-ID | Status | Commit |
 | ---- | ------ | ------ |
@@ -47,10 +47,22 @@ Review of commit `caeb2af`, branch `fix/security-1`. Status is what the regressi
 | F-015 | FIXED | `87a1ad6` |
 | F-014 | FIXED | `07ba623` |
 | F-001 | FIXED | `a7a71ff` |
-| F-002 | FIXED | `7f29088` |
+| F-002 | FIXED | `7f29088`, follow-up `e39b037` |
 | F-017 | FIXED | `1790619` |
+| F-012 | FIXED | `3d37329` |
+| F-016 | FIXED | `18fb5d3` |
+| F-027 | FIXED | `18fb5d3` |
+| F-003 | FIXED | `4f41f8b` |
+| F-013 | FIXED | `f1198bc` |
+| F-004 | FIXED | `f1198bc` |
+| F-018 | FIXED | `f1198bc` |
+| F-005 | FIXED | `f1198bc` |
+| F-022 | FIXED | `f1198bc` |
+| F-023 | FIXED | `f1198bc` |
+| F-026 | FIXED | `f1198bc` |
+| F-011 | FIXED | `f1198bc` |
 
-Identity checks for F-002 look at the workspace root and the target's parent directory, not the whole tree. The 8.3 test skips when the volume does not create short names.
+F-002's identity scan is still the workspace root and the target's parent. `read_file`, `write_file`, and `edit_file` additionally treat a regular file with link count above 1 as protected. The 8.3 test skips when the volume does not create short names. F-012 was already pinned on main by `2c5a484`; `3d37329` only locks that pin. Direct `Run` on a tool still does not itself refuse a protected path; approval is the gate. The audit log is tamper-evident against edits, deletions, and truncation, not against someone who can rewrite both the log and its state file. SEC-4 is process-group kill only, not a sandbox.
 
 ---
 

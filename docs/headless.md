@@ -28,7 +28,7 @@ forge [flags] <prompt>
 | `--permission-mode` | `string` | `"ask"` | Permission policy: `ask`, `accept-edits`, `plan`, or `yolo`. |
 | `--max-turns` | `integer` | `40` | Hard cap on the number of turns / model roundtrips before stopping. |
 | `--yes` | `bool` | `false` | Auto-approve non-dangerous file edits and ordinary shell commands. |
-| `--yolo` | `bool` | `false` | Auto-approve all operations, including dangerous commands. |
+| `--yolo` | `bool` | `false` | Auto-approve actions that are not on the safety floor. Dangerous commands and protected paths are still denied. |
 | `--provider` | `string` | `"anthropic"` | LLM provider override (`anthropic`, `openai`, `gemini`, `mock`). |
 | `--model` | `string` | *(flagship)* | Model ID override. |
 | `--base-url` | `string` | `""` | Custom API base URL (e.g. for Ollama `http://localhost:11434/v1`). |
@@ -121,7 +121,7 @@ In non-interactive headless mode, stdin is not available to prompt a human. Forg
 2. **With `--yes`**:
    File edits and non-dangerous commands are automatically allowed.
    - Protected paths (`.git/`, `.env*`, `.ssh/`, `.aws/`, private keys) cannot be auto-approved in headless mode (exit code 4).
-   - Destructive commands (`rm -rf /`, `dd`, `git push --force`) cannot be approved with `--yes` (requires `--yolo`).
+   - Destructive commands (`rm -rf /`, `dd`, `git push --force`) and other safety-floor actions cannot be auto-approved in headless mode, with or without `--yolo`.
 3. **With `--yolo`**:
-   All operations are auto-approved, with an audit log of executed actions.
+   Actions that are not on the safety floor are auto-approved. Dangerous commands and protected paths are denied. Decisions are written to the audit log.
 
