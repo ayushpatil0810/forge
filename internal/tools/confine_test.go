@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/ayushpatil0810/forge/internal/tools"
@@ -49,6 +50,50 @@ func TestWriteFile_JunctionOrSymlinkDoesNotEscape(t *testing.T) {
 		assertNoEscape(t, ws, outside, "sym/pwned.txt", "missing final component through a symlink")
 		assertNoEscape(t, ws, outside, "sym/exist.txt", "existing outside target through a symlink")
 		assertNoEscape(t, ws, outside, "sym/../exist.txt", ".. after a symlink")
+	}
+}
+
+func TestResolveInRoot_CallerSpellingOfRoot(t *testing.T) {
+	parent := t.TempDir()
+	real := filepath.Join(parent, "real")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "hello.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(parent, "link")
+	if runtime.GOOS == "windows" {
+		out, err := exec.Command("cmd", "/c", "mklink", "/J", link, real).CombinedOutput()
+		if err != nil {
+			t.Fatalf("mklink /J: %v %s", err, out)
+		}
+	} else if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlink creation not permitted: %v", err)
+	}
+
+	got, err := tools.ResolveInRoot(link, "hello.txt")
+	if err != nil {
+		t.Fatalf("ResolveInRoot: %v", err)
+	}
+	if !stringsHasPrefixFold(got, link) {
+		t.Fatalf("resolved %q is not under the caller's root %q", got, link)
+	}
+	body, err := os.ReadFile(got)
+	if err != nil || string(body) != "hello" {
+		t.Fatalf("read through caller spelling: %q err=%v", body, err)
+	}
+	if _, err := tools.ResolveInRoot(link, "../real/hello.txt"); err == nil {
+		t.Fatal("path that leaves the linked root was accepted")
+	}
+
+	ctx := context.Background()
+	listed, err := tools.ListDir{Root: link}.Run(ctx, json.RawMessage(`{"path":"."}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(listed.Output, "hello.txt") {
+		t.Fatalf("list_dir through an alternate root spelling:\n%s", listed.Output)
 	}
 }
 

@@ -30,26 +30,30 @@ func resolvePath(root, p string) (resolvedPath, error) {
 	if root == "" {
 		root = "."
 	}
+	lexical, err := lexicalRoot(root)
+	if err != nil {
+		return resolvedPath{}, err
+	}
 	realRoot, err := canonicalRoot(root)
 	if err != nil {
 		return resolvedPath{}, err
 	}
 	p = normalizeInputPath(p)
 	if p == "" || p == "." {
-		return resolvedPath{Path: realRoot}, nil
+		return resolvedPath{Path: lexical}, nil
 	}
 
 	var parts []string
 	if filepath.IsAbs(stripExtendedPrefix(p)) {
 		abs := stripExtendedPrefix(p)
-		if !sameVolume(realRoot, abs) {
+		if !sameVolume(realRoot, abs) && !sameVolume(lexical, abs) {
 			return resolvedPath{}, fmt.Errorf("path %q is outside the workspace (different drive or UNC root)", p)
 		}
-		rel, ok := relativeUnder(realRoot, abs)
+		relParts, ok := partsUnderRoot(realRoot, lexical, abs)
 		if !ok {
 			return resolvedPath{}, fmt.Errorf("path %q is outside the workspace", p)
 		}
-		parts = splitPath(rel)
+		parts = relParts
 	} else {
 		parts = splitPath(p)
 	}
@@ -132,7 +136,15 @@ func resolvePath(root, p string) (resolvedPath, error) {
 		traversed = true
 		final = stripExtendedPrefix(expandLongPath(resolved))
 	}
-	return resolvedPath{Path: final, Traversed: traversed}, nil
+	return resolvedPath{Path: rebaseOnto(lexical, realRoot, final), Traversed: traversed}, nil
+}
+
+func lexicalRoot(root string) (string, error) {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolving workspace root: %w", err)
+	}
+	return filepath.Clean(abs), nil
 }
 
 func canonicalRoot(root string) (string, error) {
@@ -144,7 +156,107 @@ func canonicalRoot(root string) (string, error) {
 	if real, err := filepath.EvalSymlinks(abs); err == nil {
 		abs = stripExtendedPrefix(real)
 	}
+	if expanded := expandLongPath(abs); expanded != "" {
+		abs = stripExtendedPrefix(expanded)
+	}
 	return abs, nil
+}
+
+// partsUnderRoot turns an absolute path into walker components. The caller's
+// spelling and the canonical spelling are both accepted, so /var and
+// /private/var, or an 8.3 root and its long name, describe the same workspace.
+func partsUnderRoot(realRoot, lexicalRoot, abs string) ([]string, bool) {
+	if rel, ok := relativeUnder(realRoot, abs); ok {
+		return splitPath(rel), true
+	}
+	if rel, ok := relativeUnder(lexicalRoot, abs); ok {
+		return splitPath(rel), true
+	}
+	if pathHasDotDot(abs) {
+		return nil, false
+	}
+	canon := canonicalizeForCompare(abs)
+	root := canonicalizeForCompare(realRoot)
+	if !withinRootLexical(root, canon) {
+		return nil, false
+	}
+	rel, err := filepath.Rel(root, canon)
+	if err != nil || escapes(rel) {
+		return nil, false
+	}
+	return splitPath(rel), true
+}
+
+// rebaseOnto expresses target, which was resolved under the canonical root,
+// using the workspace path the caller passed. Ancestor symlinks such as
+// /var -> /private/var stay in the caller's spelling. The relative suffix,
+// including an expanded 8.3 file name, is preserved.
+func rebaseOnto(lexical, real, target string) string {
+	target = stripExtendedPrefix(target)
+	real = stripExtendedPrefix(real)
+	if sameDir(target, real) {
+		return lexical
+	}
+	rel, err := filepath.Rel(real, target)
+	if err != nil || escapes(rel) {
+		ct := canonicalizeForCompare(target)
+		cr := canonicalizeForCompare(real)
+		rel, err = filepath.Rel(cr, ct)
+		if err != nil || escapes(rel) {
+			return target
+		}
+	}
+	if rel == "." {
+		return lexical
+	}
+	return filepath.Join(lexical, rel)
+}
+
+func canonicalizeForCompare(p string) string {
+	p = stripExtendedPrefix(filepath.Clean(p))
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		p = stripExtendedPrefix(real)
+	} else {
+		var missing []string
+		cur := p
+		for {
+			parent := filepath.Dir(cur)
+			if parent == cur {
+				return p
+			}
+			if _, err := os.Lstat(parent); err == nil {
+				if real, err := filepath.EvalSymlinks(parent); err == nil {
+					cur = stripExtendedPrefix(real)
+				} else {
+					cur = parent
+				}
+				for i := len(missing) - 1; i >= 0; i-- {
+					cur = filepath.Join(cur, missing[i])
+				}
+				p = cur
+				break
+			}
+			missing = append(missing, filepath.Base(cur))
+			cur = parent
+		}
+	}
+	if expanded := expandLongPath(p); expanded != "" {
+		p = stripExtendedPrefix(expanded)
+	}
+	return p
+}
+
+func pathHasDotDot(p string) bool {
+	for _, part := range splitPath(p) {
+		if part == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func escapes(rel string) bool {
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func splitPath(p string) []string {
@@ -186,6 +298,13 @@ func relativeUnder(root, abs string) (string, bool) {
 }
 
 func withinRoot(root, target string) bool {
+	if withinRootLexical(root, target) {
+		return true
+	}
+	return withinRootLexical(canonicalizeForCompare(root), canonicalizeForCompare(target))
+}
+
+func withinRootLexical(root, target string) bool {
 	root = stripExtendedPrefix(filepath.Clean(root))
 	target = stripExtendedPrefix(filepath.Clean(target))
 	if runtime.GOOS == "windows" {
@@ -199,7 +318,7 @@ func withinRoot(root, target string) bool {
 	if err != nil {
 		return false
 	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	return !escapes(rel)
 }
 
 func isLink(fi os.FileInfo, path string) bool {
