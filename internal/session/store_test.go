@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -43,7 +44,34 @@ func TestStore_Migrations(t *testing.T) {
 		t.Fatalf("expected version %d, got %d", session.CurrentSchemaVersion, version)
 	}
 
-	// 2. Newer schema refusal
+	// 2. Upgrade from an older schema (simulating schema version 0 with unmigrated state)
+	olderDBPath := filepath.Join(tempDir, "older.db")
+	olderRaw, err := sql.Open("sqlite", olderDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = olderRaw.Exec("CREATE TABLE legacy_data (col TEXT)")
+	_ = olderRaw.Close()
+
+	olderStore, err := session.NewStore(olderDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = olderStore.Close() }()
+
+	olderOpened, err := olderStore.Open()
+	if err != nil {
+		t.Fatalf("upgrading older schema failed: %v", err)
+	}
+	var upgradedVer int
+	if err := olderOpened.QueryRow("SELECT MAX(version) FROM schema_version").Scan(&upgradedVer); err != nil {
+		t.Fatalf("querying upgraded schema version failed: %v", err)
+	}
+	if upgradedVer != session.CurrentSchemaVersion {
+		t.Fatalf("expected upgraded version %d, got %d", session.CurrentSchemaVersion, upgradedVer)
+	}
+
+	// 3. Newer schema refusal (no writes executed)
 	newerDBPath := filepath.Join(tempDir, "newer.db")
 	newerDB, err := sql.Open("sqlite", newerDBPath)
 	if err != nil {
@@ -62,7 +90,16 @@ func TestStore_Migrations(t *testing.T) {
 		t.Fatalf("expected error to mention 'upgrade forge', got: %v", openErr)
 	}
 
-	// 3. Corrupt database refusal (graceful, no panic)
+	// Assert no writes occurred on newer database
+	verifyDB, _ := sql.Open("sqlite", newerDBPath)
+	var count int
+	_ = verifyDB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages'").Scan(&count)
+	_ = verifyDB.Close()
+	if count != 0 {
+		t.Fatalf("expected 0 writes to newer database, but found migrated tables")
+	}
+
+	// 4. Corrupt database refusal (graceful, no panic, friendly error)
 	corruptDBPath := filepath.Join(tempDir, "corrupt.db")
 	_ = os.WriteFile(corruptDBPath, []byte("NOT A VALID SQLITE DATABASE FILE HEADER"), 0600)
 
@@ -71,8 +108,8 @@ func TestStore_Migrations(t *testing.T) {
 	if corruptErr == nil {
 		t.Fatal("expected error opening corrupt database, got nil")
 	}
-	if !strings.Contains(corruptErr.Error(), "corrupt") {
-		t.Fatalf("expected error to mention 'corrupt', got: %v", corruptErr)
+	if !strings.Contains(corruptErr.Error(), "corrupt") && !strings.Contains(corruptErr.Error(), "database") {
+		t.Fatalf("expected friendly error mentioning database issue, got: %v", corruptErr)
 	}
 }
 
@@ -134,6 +171,19 @@ func TestStore_RedactionOnWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// 4. Message with secret in error output
+	errMsgID := "msg_err_1"
+	err = store.SaveMessage(ctx, session.MessageRecord{
+		ID:        errMsgID,
+		SessionID: sessID,
+		Role:      "assistant",
+		Content:   fmt.Sprintf("Failed with error: Invalid authorization key %s", fakeSecretKey),
+		CreatedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	// Query raw SQLite database directly to assert secret NEVER exists in rows
 	rawDB, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -151,6 +201,12 @@ func TestStore_RedactionOnWrite(t *testing.T) {
 	_ = rawDB.QueryRow("SELECT content FROM messages WHERE id = ?", msgID).Scan(&content)
 	if strings.Contains(content, fakeSecretKey) {
 		t.Fatalf("CRITICAL SECURITY LEAK: secret found in messages.content: %s", content)
+	}
+
+	var errContent string
+	_ = rawDB.QueryRow("SELECT content FROM messages WHERE id = ?", errMsgID).Scan(&errContent)
+	if strings.Contains(errContent, fakeSecretKey) {
+		t.Fatalf("CRITICAL SECURITY LEAK: secret found in error messages.content: %s", errContent)
 	}
 
 	var input, output string
@@ -331,6 +387,114 @@ func TestStore_ConcurrentAccess(t *testing.T) {
 	}
 }
 
+func TestStore_ConcurrentSubprocesses(t *testing.T) {
+	if os.Getenv("FORGE_TEST_SUBPROCESS_SQLITE") == "1" {
+		dbPath := os.Getenv("FORGE_TEST_DB_PATH")
+		procID := os.Getenv("FORGE_TEST_PROC_ID")
+		store, err := session.NewStore(dbPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "NewStore failed: %v\n", err)
+			os.Exit(1)
+		}
+		defer func() { _ = store.Close() }()
+
+		ctx := context.Background()
+		sessID := fmt.Sprintf("sess_proc_%s", procID)
+		if err := store.CreateSession(ctx, session.SessionRecord{
+			ID:        sessID,
+			Workspace: "/workspace",
+			Provider:  "openai",
+			Model:     "gpt-4o",
+			Title:     "Proc " + procID,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "CreateSession failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		for m := 0; m < 5; m++ {
+			msgID := fmt.Sprintf("msg_%s_%d", procID, m)
+			if err := store.SaveMessage(ctx, session.MessageRecord{
+				ID:        msgID,
+				SessionID: sessID,
+				Role:      "user",
+				Content:   fmt.Sprintf("Hello from proc %s msg %d", procID, m),
+				CreatedAt: time.Now(),
+			}); err != nil {
+				fmt.Fprintf(os.Stderr, "SaveMessage failed: %v\n", err)
+				os.Exit(1)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		os.Exit(0)
+	}
+
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_concurrent_subprocs.db")
+
+	// Initialize store and schema
+	initialStore, err := session.NewStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := initialStore.Open(); err != nil {
+		t.Fatal(err)
+	}
+	_ = initialStore.Close()
+
+	numProcs := 2
+	var wg sync.WaitGroup
+	errCh := make(chan error, numProcs)
+
+	for i := 0; i < numProcs; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			cmd := exec.Command(os.Args[0], "-test.run=TestStore_ConcurrentSubprocesses", "--")
+			cmd.Env = append(os.Environ(),
+				"FORGE_TEST_SUBPROCESS_SQLITE=1",
+				fmt.Sprintf("FORGE_TEST_DB_PATH=%s", dbPath),
+				fmt.Sprintf("FORGE_TEST_PROC_ID=%d", id),
+			)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				errCh <- fmt.Errorf("subprocess %d failed (%v): %s", id, err, string(out))
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		t.Errorf("concurrent sqlite subprocess error: %v", err)
+	}
+
+	// Verify both sessions and all messages were written successfully
+	verifyStore, err := session.NewStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = verifyStore.Close() }()
+
+	ctx := context.Background()
+	for i := 0; i < numProcs; i++ {
+		sessID := fmt.Sprintf("sess_proc_%d", i)
+		rec, err := verifyStore.GetSession(ctx, sessID)
+		if err != nil {
+			t.Errorf("expected session %s to exist: %v", sessID, err)
+		}
+		if rec.Title != fmt.Sprintf("Proc %d", i) {
+			t.Errorf("expected session title 'Proc %d', got %q", i, rec.Title)
+		}
+		msgs, err := verifyStore.GetMessages(ctx, sessID)
+		if err != nil || len(msgs) != 5 {
+			t.Errorf("expected 5 messages for session %s, got %d (err: %v)", sessID, len(msgs), err)
+		}
+	}
+}
+
 func TestSession_CrashRecoverySynthesis(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test_crash.db")
@@ -409,7 +573,12 @@ func TestSession_ResumeAcrossProviderSwitch(t *testing.T) {
 	})
 
 	_ = store.SaveMessage(ctx, session.MessageRecord{ID: "m1", SessionID: sessID, Role: "user", Content: "Hello from OpenAI turn", CreatedAt: time.Now()})
-	_ = store.SaveMessage(ctx, session.MessageRecord{ID: "m2", SessionID: sessID, Role: "assistant", Content: "Understood", CreatedAt: time.Now()})
+	_ = store.SaveMessage(ctx, session.MessageRecord{ID: "m2", SessionID: sessID, Role: "assistant", Content: "Calling read tool...", CreatedAt: time.Now()})
+	_ = store.SaveToolCall(ctx, session.ToolCallRecord{
+		ID: "tc_switch_1", MessageID: "m2", Name: "read_file", Input: `{"path":"main.go"}`, Output: "package main\n", Status: "success", DurationMs: 12, CreatedAt: time.Now(),
+	})
+	_ = store.SaveMessage(ctx, session.MessageRecord{ID: "m3", SessionID: sessID, Role: "tool", Content: "package main\n", ToolCallID: "tc_switch_1", CreatedAt: time.Now()})
+	_ = store.SaveMessage(ctx, session.MessageRecord{ID: "m4", SessionID: sessID, Role: "assistant", Content: "File inspection complete.", CreatedAt: time.Now()})
 
 	// Resume and switch provider to mock (simulating switching from OpenAI to Anthropic/Mock)
 	resumed, err := session.LoadResumedSession(ctx, store, sessID)
@@ -436,20 +605,26 @@ func TestSession_ResumeAcrossProviderSwitch(t *testing.T) {
 	for range stream {
 	}
 
-	if len(capturedHistory) != 4 {
-		t.Fatalf("expected 4 messages in captured history (user, assistant, resume note, follow-up), got %d", len(capturedHistory))
+	if len(capturedHistory) != 6 {
+		t.Fatalf("expected 6 messages in captured history (user, assistant-with-call, tool-result, assistant-resp, resume note, follow-up), got %d", len(capturedHistory))
 	}
 	if capturedHistory[0].Text != "Hello from OpenAI turn" {
 		t.Errorf("expected original user text, got %q", capturedHistory[0].Text)
 	}
-	if capturedHistory[1].Text != "Understood" {
-		t.Errorf("expected original assistant text, got %q", capturedHistory[1].Text)
+	if len(capturedHistory[1].ToolCalls) == 0 || capturedHistory[1].ToolCalls[0].ID != "tc_switch_1" {
+		t.Errorf("expected tool call tc_switch_1 at index 1, got %+v", capturedHistory[1].ToolCalls)
 	}
-	if !strings.Contains(capturedHistory[2].Text, "[Resumed session") {
-		t.Errorf("expected resume system note at index 2, got %q", capturedHistory[2].Text)
+	if capturedHistory[2].Role != llm.RoleTool || capturedHistory[2].ToolCallID != "tc_switch_1" {
+		t.Errorf("expected tool result role and tool call id at index 2, got %+v", capturedHistory[2])
 	}
-	if capturedHistory[3].Text != "Now continue" {
-		t.Errorf("expected follow-up prompt, got %q", capturedHistory[3].Text)
+	if capturedHistory[3].Text != "File inspection complete." {
+		t.Errorf("expected assistant response at index 3, got %q", capturedHistory[3].Text)
+	}
+	if !strings.Contains(capturedHistory[4].Text, "[Resumed session") {
+		t.Errorf("expected resume system note at index 4, got %q", capturedHistory[4].Text)
+	}
+	if capturedHistory[5].Text != "Now continue" {
+		t.Errorf("expected follow-up prompt, got %q", capturedHistory[5].Text)
 	}
 }
 

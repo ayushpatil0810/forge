@@ -84,8 +84,11 @@ type Store struct {
 	db     *sql.DB
 }
 
-// DefaultDBPath returns ~/.forge/sessions.db
+// DefaultDBPath returns the session SQLite database path (or FORGE_SESSIONS_PATH if set).
 func DefaultDBPath() (string, error) {
+	if env := os.Getenv("FORGE_SESSIONS_PATH"); env != "" {
+		return env, nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return "", errors.New("user home directory not found")
@@ -140,13 +143,6 @@ func (s *Store) Open() (*sql.DB, error) {
 	_, _ = db.Exec("PRAGMA busy_timeout = 5000;")
 	_, _ = db.Exec("PRAGMA foreign_keys = ON;")
 
-	// Verify database integrity / check for corruption
-	var quickCheck string
-	if err := db.QueryRow("PRAGMA quick_check").Scan(&quickCheck); err != nil || quickCheck != "ok" {
-		_ = db.Close()
-		return nil, fmt.Errorf("database at %q appears corrupt: %v (quick_check: %s). Suggested recovery: rename or move the database file, or run 'forge sessions prune --force'", s.dbPath, err, quickCheck)
-	}
-
 	// Run migrations
 	if err := migrate(db); err != nil {
 		_ = db.Close()
@@ -155,6 +151,33 @@ func (s *Store) Open() (*sql.DB, error) {
 
 	s.db = db
 	return s.db, nil
+}
+
+// UpdateSessionTitle updates the title of an existing session if currently unset or default.
+func (s *Store) UpdateSessionTitle(ctx context.Context, id, title string) error {
+	db, err := s.Open()
+	if err != nil {
+		return err
+	}
+	title = TruncateTitle(title)
+	if title == "" {
+		return nil
+	}
+	_, err = db.ExecContext(ctx, "UPDATE sessions SET title = ?, updated_at = ? WHERE id = ? AND (title IS NULL OR title = '' OR title = 'New Session')", title, time.Now().UTC(), id)
+	return err
+}
+
+// Doctor performs an integrity check (PRAGMA quick_check) on the database file.
+func (s *Store) Doctor(ctx context.Context) (string, error) {
+	db, err := s.Open()
+	if err != nil {
+		return "", err
+	}
+	var res string
+	if err := db.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&res); err != nil {
+		return "", fmt.Errorf("database integrity check failed: %w", err)
+	}
+	return res, nil
 }
 
 // Close closes the underlying SQLite database.

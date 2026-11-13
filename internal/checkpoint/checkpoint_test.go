@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ayushpatil0810/forge/internal/checkpoint"
 )
@@ -320,79 +321,169 @@ func BenchmarkIncrementalSnapshot10kFiles(b *testing.B) {
 	}
 }
 
-func TestConcurrentLocking(t *testing.T) {
+func TestConcurrentLockingSubprocesses(t *testing.T) {
+	if os.Getenv("FORGE_TEST_SUBPROCESS_LOCK") == "1" {
+		ws := os.Getenv("FORGE_TEST_WS")
+		procID := os.Getenv("FORGE_TEST_PROC_ID")
+		mgr, err := checkpoint.New(ws)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "New failed: %v\n", err)
+			os.Exit(1)
+		}
+		for round := 0; round < 2; round++ {
+			target := filepath.Join(ws, fmt.Sprintf("proc_%s_round_%d.txt", procID, round))
+			if err := os.WriteFile(target, []byte(fmt.Sprintf("proc %s round %d time %d\n", procID, round, time.Now().UnixNano())), 0644); err != nil {
+				fmt.Fprintf(os.Stderr, "WriteFile failed: %v\n", err)
+				os.Exit(1)
+			}
+			if _, err := mgr.Create(context.Background(), fmt.Sprintf("commit proc %s round %d", procID, round)); err != nil {
+				fmt.Fprintf(os.Stderr, "Create failed: %v\n", err)
+				os.Exit(1)
+			}
+			time.Sleep(30 * time.Millisecond)
+		}
+		os.Exit(0)
+	}
+
 	ws := t.TempDir()
-	f := filepath.Join(ws, "concurrent.txt")
-	_ = os.WriteFile(f, []byte("init\n"), 0644)
+	initFile := filepath.Join(ws, "init.txt")
+	_ = os.WriteFile(initFile, []byte("init\n"), 0644)
 
-	// Two separate managers simulating two processes accessing the same workspace
-	mgr1, err := checkpoint.New(ws)
-	if err != nil {
-		t.Fatal(err)
-	}
-	mgr2, err := checkpoint.New(ws)
+	mgr, err := checkpoint.New(ws)
 	if err != nil {
 		t.Fatal(err)
 	}
 
+	numProcs := 3
 	var wg sync.WaitGroup
-	errCh := make(chan error, 10)
+	errCh := make(chan error, numProcs)
 
-	// Round 1
-	for i := 0; i < 2; i++ {
+	for i := 0; i < numProcs; i++ {
 		wg.Add(1)
-		go func(idx int) {
+		go func(id int) {
 			defer wg.Done()
-			var m *checkpoint.Manager
-			if idx%2 == 0 {
-				m = mgr1
-			} else {
-				m = mgr2
-			}
-			target := filepath.Join(ws, fmt.Sprintf("round1_%d.txt", idx))
-			_ = os.WriteFile(target, []byte(fmt.Sprintf("round 1 data %d\n", idx)), 0644)
-
-			_, err := m.Create(context.Background(), fmt.Sprintf("round 1 commit %d", idx))
+			cmd := exec.Command(os.Args[0], "-test.run=TestConcurrentLockingSubprocesses", "--")
+			cmd.Env = append(os.Environ(),
+				"FORGE_TEST_SUBPROCESS_LOCK=1",
+				fmt.Sprintf("FORGE_TEST_WS=%s", ws),
+				fmt.Sprintf("FORGE_TEST_PROC_ID=%d", id),
+			)
+			out, err := cmd.CombinedOutput()
 			if err != nil {
-				errCh <- fmt.Errorf("round 1 failed: %w", err)
+				errCh <- fmt.Errorf("proc %d failed (%v): %s", id, err, string(out))
 			}
 		}(i)
 	}
-	wg.Wait()
 
-	// Round 2 with mutations
-	for i := 0; i < 2; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			var m *checkpoint.Manager
-			if idx%2 == 0 {
-				m = mgr1
-			} else {
-				m = mgr2
-			}
-			target := filepath.Join(ws, fmt.Sprintf("round2_%d.txt", idx))
-			_ = os.WriteFile(target, []byte(fmt.Sprintf("round 2 data %d\n", idx)), 0644)
-
-			_, err := m.Create(context.Background(), fmt.Sprintf("round 2 commit %d", idx))
-			if err != nil {
-				errCh <- fmt.Errorf("round 2 failed: %w", err)
-			}
-		}(i)
-	}
 	wg.Wait()
 	close(errCh)
 
 	for err := range errCh {
-		t.Errorf("concurrent checkpoint error: %v", err)
+		t.Errorf("concurrent subprocess error: %v", err)
 	}
 
-	// Verify all checkpoints exist and repository is healthy
-	list, err := mgr1.List(context.Background(), 20)
+	list, err := mgr.List(context.Background(), 20)
 	if err != nil {
-		t.Fatalf("failed to list checkpoints after concurrent execution: %v", err)
+		t.Fatalf("failed to list checkpoints: %v", err)
 	}
 	if len(list) < 2 {
 		t.Fatalf("expected at least 2 checkpoints, got %d", len(list))
+	}
+}
+
+func TestCheckpoint_NoNewWorkspaceFiles(t *testing.T) {
+	ws := t.TempDir()
+	fileA := filepath.Join(ws, "a.txt")
+	subDir := filepath.Join(ws, "sub")
+	_ = os.MkdirAll(subDir, 0755)
+	fileB := filepath.Join(subDir, "b.txt")
+
+	_ = os.WriteFile(fileA, []byte("original a"), 0644)
+	_ = os.WriteFile(fileB, []byte("original b"), 0644)
+
+	collectFiles := func() map[string]string {
+		res := make(map[string]string)
+		_ = filepath.Walk(ws, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
+				return nil
+			}
+			rel, _ := filepath.Rel(ws, path)
+			data, _ := os.ReadFile(path)
+			res[filepath.ToSlash(rel)] = string(data)
+			return nil
+		})
+		return res
+	}
+
+	initialFiles := collectFiles()
+
+	mgr, err := checkpoint.New(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Create checkpoint
+	cp, err := mgr.Create(context.Background(), "baseline")
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	// Verify no new files in workspace after create
+	afterCreate := collectFiles()
+	if len(afterCreate) != len(initialFiles) {
+		t.Fatalf("Create added files to workspace: %+v vs %+v", afterCreate, initialFiles)
+	}
+
+	// 2. Mutate files and add a new one
+	_ = os.WriteFile(fileA, []byte("mutated a"), 0644)
+	fileC := filepath.Join(ws, "c.txt")
+	_ = os.WriteFile(fileC, []byte("new c"), 0644)
+
+	// 3. Restore checkpoint
+	_, err = mgr.Restore(context.Background(), cp.ID)
+	if err != nil {
+		t.Fatalf("Restore failed: %v", err)
+	}
+
+	// Verify files match original exactly - no .forge, no .lock, no extra files
+	afterRestore := collectFiles()
+	if len(afterRestore) != len(initialFiles) {
+		t.Fatalf("Restore left extra files: %+v vs %+v", afterRestore, initialFiles)
+	}
+	for k, v := range initialFiles {
+		if afterRestore[k] != v {
+			t.Errorf("file %s mismatch after restore: got %q, want %q", k, afterRestore[k], v)
+		}
+	}
+}
+
+func TestCheckpoint_Sub232Degradation(t *testing.T) {
+	restore := checkpoint.SetGitVersionCmdForTesting(func(ctx context.Context) (string, error) {
+		return "git version 2.31.1.windows.1", nil
+	})
+	defer restore()
+
+	ws := t.TempDir()
+	_ = os.WriteFile(filepath.Join(ws, "sample.txt"), []byte("data"), 0644)
+
+	mgr, err := checkpoint.New(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = mgr.Create(context.Background(), "test old git")
+	if err == nil {
+		t.Fatal("expected error on sub-2.32 git, got nil")
+	}
+	if !strings.Contains(err.Error(), "older than required 2.32.0") {
+		t.Fatalf("expected error mentioning 'older than required 2.32.0', got: %v", err)
+	}
+
+	disabled, reason := mgr.IsDisabled()
+	if !disabled {
+		t.Fatal("expected manager to be disabled")
+	}
+	if !strings.Contains(reason, "GIT_CONFIG_GLOBAL") {
+		t.Fatalf("expected reason to mention GIT_CONFIG_GLOBAL, got: %s", reason)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -123,23 +124,31 @@ type Config struct {
 	Client  *http.Client
 }
 
-// NormalizeBaseURL normalizes an OpenAI-compatible base URL ensuring a /v1 suffix.
-// Ollama presets default to http://127.0.0.1:11434 (without /v1), while LM Studio
-// presets use http://127.0.0.1:1234/v1. Normalizing to ensure /v1 guarantees that
-// appending /chat/completions reaches the valid endpoint.
-//
-// Documentation references:
-// - Ollama OpenAI compatibility: https://github.com/ollama/ollama/blob/main/docs/openai.md
-// - LM Studio endpoints: https://lmstudio.ai/docs/api/endpoints
+// NormalizeBaseURL normalizes an OpenAI-compatible base URL.
+// Per specification, it appends /v1 only for built-in local presets (ollama, lmstudio)
+// or when the URL has an empty path. All other custom base URLs (e.g. Gemini's
+// .../v1beta/openai or proxies with custom endpoints like .../api/v1) are preserved
+// verbatim, apart from trimming trailing slashes.
 func NormalizeBaseURL(rawURL string) string {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
 		return defaultBaseURL
 	}
 	trimmed := strings.TrimRight(rawURL, "/")
-	if !strings.HasSuffix(trimmed, "/v1") {
-		return trimmed + "/v1"
+	u, err := url.Parse(trimmed)
+	if err != nil {
+		return trimmed
 	}
+
+	isPreset := strings.Contains(u.Host, "11434") || strings.Contains(u.Host, "1234")
+
+	if u.Path == "" || u.Path == "/" || (isPreset && !strings.HasSuffix(trimmed, "/v1")) {
+		if !strings.HasSuffix(trimmed, "/v1") {
+			return trimmed + "/v1"
+		}
+		return trimmed
+	}
+
 	return trimmed
 }
 

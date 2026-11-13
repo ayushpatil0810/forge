@@ -41,7 +41,51 @@ type Manager struct {
 	ShadowDir      string
 	MaxCheckpoints int
 	MaxFileSize    int64
+	disabled       bool
+	disableReason  string
 	initialized    bool
+}
+
+// GitVersionFunc allows mocking git version output in tests.
+var gitVersionCmd = func(ctx context.Context) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "--version")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// SetGitVersionCmdForTesting allows tests to simulate different Git versions.
+func SetGitVersionCmdForTesting(fn func(ctx context.Context) (string, error)) func() {
+	orig := gitVersionCmd
+	gitVersionCmd = fn
+	return func() { gitVersionCmd = orig }
+}
+
+// ParseGitVersion extracts major and minor integers from a git --version string.
+func ParseGitVersion(raw string) (major, minor int, err error) {
+	fields := strings.Fields(raw)
+	for i, f := range fields {
+		if f == "version" && i+1 < len(fields) {
+			parts := strings.Split(fields[i+1], ".")
+			if len(parts) >= 2 {
+				maj, err1 := strconv.Atoi(parts[0])
+				min, err2 := strconv.Atoi(parts[1])
+				if err1 == nil && err2 == nil {
+					return maj, min, nil
+				}
+			}
+		}
+	}
+	return 0, 0, fmt.Errorf("unable to parse git version from %q", raw)
+}
+
+// IsDisabled reports whether checkpoints are disabled (e.g. due to unsupported git version).
+func (m *Manager) IsDisabled() (bool, string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.disabled, m.disableReason
 }
 
 // New creates a new checkpoint manager for the given workspace root.
@@ -75,6 +119,19 @@ func New(workspaceRoot string) (*Manager, error) {
 func (m *Manager) ensureInit(ctx context.Context) error {
 	if m.initialized {
 		return nil
+	}
+
+	// Verify git version >= 2.32 (when GIT_CONFIG_GLOBAL was introduced)
+	verStr, err := gitVersionCmd(ctx)
+	if err == nil {
+		if maj, min, pErr := ParseGitVersion(verStr); pErr == nil {
+			if maj < 2 || (maj == 2 && min < 32) {
+				m.disabled = true
+				m.disableReason = fmt.Sprintf("git version %d.%d is older than required 2.32.0 (GIT_CONFIG_GLOBAL isolation unsupported); checkpoints disabled", maj, min)
+				m.initialized = true
+				return nil
+			}
+		}
 	}
 
 	if _, err := os.Stat(filepath.Join(m.ShadowDir, "HEAD")); os.IsNotExist(err) {
@@ -211,6 +268,10 @@ func (m *Manager) Create(ctx context.Context, message string) (*Checkpoint, erro
 		return nil, err
 	}
 
+	if m.disabled {
+		return nil, fmt.Errorf("checkpoints disabled: %s", m.disableReason)
+	}
+
 	skipped := m.scanSkippedLargeFiles()
 
 	// Stage workspace files into isolated index (respecting info/exclude and .gitignore)
@@ -294,6 +355,10 @@ func (m *Manager) Restore(ctx context.Context, id string) (*Checkpoint, error) {
 		return nil, err
 	}
 
+	if m.disabled {
+		return nil, fmt.Errorf("checkpoints disabled: %s", m.disableReason)
+	}
+
 	targetCommit, err := m.git(ctx, "rev-parse", "--verify", id)
 	if err != nil {
 		// Try resolving short ID
@@ -364,6 +429,10 @@ func (m *Manager) List(ctx context.Context, limit int) ([]Checkpoint, error) {
 func (m *Manager) listUnlocked(ctx context.Context, limit int) ([]Checkpoint, error) {
 	if err := m.ensureInit(ctx); err != nil {
 		return nil, err
+	}
+
+	if m.disabled {
+		return nil, fmt.Errorf("checkpoints disabled: %s", m.disableReason)
 	}
 
 	out, err := m.git(ctx, "log", "refs/heads/main", "--format=%H|%T|%ct|%s", fmt.Sprintf("-n%d", limit))

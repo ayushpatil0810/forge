@@ -119,27 +119,65 @@ func TestSessionsCmd_ListShowDeletePrune(t *testing.T) {
 		t.Errorf("expected show output with id, title and cost, got:\n%s", showStr)
 	}
 
-	// 4. Test Prune (older than 30 days)
+	// 4. Test Prune (aborts without --yes on empty stdin)
 	outBuf.Reset()
 	cmd = newSessionsCmd()
 	cmd.SetOut(&outBuf)
+	cmd.SetIn(strings.NewReader("n\n"))
 	cmd.SetArgs([]string{"prune", "--older-than", "30"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("sessions prune failed: %v", err)
 	}
-	if !strings.Contains(outBuf.String(), "Pruned 1 sessions") {
-		t.Errorf("expected prune to remove 1 session, got:\n%s", outBuf.String())
+	if !strings.Contains(outBuf.String(), "Prune aborted") {
+		t.Errorf("expected prune to abort without --yes, got:\n%s", outBuf.String())
 	}
 
-	// 5. Test Delete
+	// 4b. Test Prune with --yes
 	outBuf.Reset()
 	cmd = newSessionsCmd()
 	cmd.SetOut(&outBuf)
+	cmd.SetArgs([]string{"prune", "--older-than", "30", "--yes"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("sessions prune with --yes failed: %v", err)
+	}
+	if !strings.Contains(outBuf.String(), "Pruned 1 sessions") {
+		t.Errorf("expected prune with --yes to remove 1 session, got:\n%s", outBuf.String())
+	}
+
+	// 5. Test Delete (aborts without --yes on empty stdin)
+	outBuf.Reset()
+	cmd = newSessionsCmd()
+	cmd.SetOut(&outBuf)
+	cmd.SetIn(strings.NewReader("n\n"))
 	cmd.SetArgs([]string{"delete", "s_test_1"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("sessions delete failed: %v", err)
 	}
+	if !strings.Contains(outBuf.String(), "Deletion aborted") {
+		t.Errorf("expected delete to abort without --yes, got:\n%s", outBuf.String())
+	}
+
+	// 5b. Test Delete with --yes
+	outBuf.Reset()
+	cmd = newSessionsCmd()
+	cmd.SetOut(&outBuf)
+	cmd.SetArgs([]string{"delete", "s_test_1", "--yes"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("sessions delete with --yes failed: %v", err)
+	}
 	if !strings.Contains(outBuf.String(), "Session s_test_1 deleted") {
 		t.Errorf("expected delete confirmation, got:\n%s", outBuf.String())
+	}
+
+	// 6. Test Doctor
+	outBuf.Reset()
+	cmd = newSessionsCmd()
+	cmd.SetOut(&outBuf)
+	cmd.SetArgs([]string{"doctor"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("sessions doctor failed: %v", err)
+	}
+	if !strings.Contains(outBuf.String(), "Database integrity: ok") {
+		t.Errorf("expected doctor to report ok, got:\n%s", outBuf.String())
 	}
 }

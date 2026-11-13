@@ -19,6 +19,20 @@ type fileLock struct {
 	file *os.File
 }
 
+// isLockHeldError checks if an error from OpenFile indicates the lock file exists or is held.
+func isLockHeldError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if os.IsExist(err) || os.IsPermission(err) {
+		return true
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "access is denied") ||
+		strings.Contains(errStr, "sharing violation") ||
+		strings.Contains(errStr, "already exists")
+}
+
 // acquireLock acquires an exclusive inter-process lock on the shadow repository.
 // It retries until the timeout expires or the context is cancelled.
 // If an existing lock file is stale (> 30s old), it is automatically cleaned up.
@@ -34,7 +48,7 @@ func acquireLock(ctx context.Context, lockPath string, timeout time.Duration) (*
 			return &fileLock{path: lockPath, file: f}, nil
 		}
 
-		if !os.IsExist(err) {
+		if !isLockHeldError(err) {
 			// If parent directory didn't exist, create it and retry
 			if mkErr := os.MkdirAll(filepath.Dir(lockPath), 0700); mkErr == nil {
 				f2, err2 := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
@@ -56,7 +70,7 @@ func acquireLock(ctx context.Context, lockPath string, timeout time.Duration) (*
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(25 * time.Millisecond):
+		case <-time.After(50 * time.Millisecond):
 			if time.Now().After(deadline) {
 				return nil, ErrLocked
 			}

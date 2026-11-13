@@ -24,6 +24,19 @@ type SessionsConfig struct {
 	DatabasePath  string `json:"database_path,omitempty"`
 }
 
+// AuditConfig controls audit log settings (SPEC §3.3 P-7).
+type AuditConfig struct {
+	Enabled  *bool  `json:"enabled,omitempty"`
+	Path     string `json:"path,omitempty"`
+	MaxMB    int    `json:"max_mb,omitempty"`
+	Required bool   `json:"required,omitempty"`
+}
+
+// RedactionConfig controls secret redaction in tool output (SEC-5).
+type RedactionConfig struct {
+	ToolOutput *bool `json:"tool_output,omitempty"`
+}
+
 // Config holds agent configuration parameters across layers.
 type Config struct {
 	Provider           string            `json:"provider,omitempty"`
@@ -37,6 +50,8 @@ type Config struct {
 	SystemPrompt       string            `json:"system_prompt,omitempty"`
 	Shell              string            `json:"shell,omitempty"`
 	Sessions           *SessionsConfig   `json:"sessions,omitempty"`
+	Audit              *AuditConfig      `json:"audit,omitempty"`
+	Redaction          *RedactionConfig  `json:"redaction,omitempty"`
 	Providers          []ProviderProfile `json:"providers,omitempty"`
 	IgnoredProjectKeys map[string]string `json:"ignored_project_keys,omitempty"`
 	Warnings           []string          `json:"-"`
@@ -284,8 +299,24 @@ func mergeProjectFile(dst *Config, path string) error {
 			reason := "cannot disable safety prompts via repository files"
 			dst.IgnoredProjectKeys["yolo"] = reason
 			dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Forbidden key %q in project config %q ignored (%s)", k, path, reason))
-		case "sessions", "session":
+		case "sessions", "session", "sessions.enabled", "sessions.retention_days", "sessions.database_path":
 			reason := "session database path and persistence settings can only be configured in user config or CLI flags"
+			dst.IgnoredProjectKeys[k] = reason
+			dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Forbidden key %q in project config %q ignored (%s)", k, path, reason))
+		case "audit", "audit.path", "audit.enabled", "audit.max_mb", "audit.required", "audit_path":
+			reason := "audit log configuration can only be configured in user config or CLI flags"
+			dst.IgnoredProjectKeys[k] = reason
+			dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Forbidden key %q in project config %q ignored (%s)", k, path, reason))
+		case "redaction", "redaction.tool_output":
+			reason := "redaction settings can only be configured in user config or CLI flags"
+			dst.IgnoredProjectKeys[k] = reason
+			dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Forbidden key %q in project config %q ignored (%s)", k, path, reason))
+		case "database_path", "db_path":
+			reason := "database path can only be configured in user config or CLI flags"
+			dst.IgnoredProjectKeys[k] = reason
+			dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Forbidden key %q in project config %q ignored (%s)", k, path, reason))
+		case "endpoint", "url", "proxy":
+			reason := "endpoint URLs can only be configured in user config or CLI flags"
 			dst.IgnoredProjectKeys[k] = reason
 			dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Forbidden key %q in project config %q ignored (%s)", k, path, reason))
 		default:
