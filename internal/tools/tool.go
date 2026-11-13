@@ -21,6 +21,7 @@ type Result struct {
 type ApprovalRequest struct {
 	Description    string `json:"description,omitempty"`
 	Diff           string `json:"diff,omitempty"`
+	Path           string `json:"path,omitempty"`
 	IsProtected    bool   `json:"isProtected,omitempty"`
 	IsDangerous    bool   `json:"isDangerous,omitempty"`
 	Command        string `json:"command,omitempty"`

@@ -7,17 +7,22 @@ import (
 	"errors"
 	"time"
 
+	"github.com/ayushpatil0810/forge/internal/audit"
 	"github.com/ayushpatil0810/forge/internal/llm"
 	"github.com/ayushpatil0810/forge/internal/permission"
+	"github.com/ayushpatil0810/forge/internal/policy"
 	"github.com/ayushpatil0810/forge/internal/tools"
 )
 
 type Decision string
 
 const (
-	DecisionAllow       Decision = "allow"
-	DecisionAllowAlways Decision = "allow_always" // for this tool, this session
-	DecisionDeny        Decision = "deny"
+	DecisionAllow            Decision = "allow"              // 'y': allow once
+	DecisionAllowSession     Decision = "allow_session"      // 'a': allow for this tool in this session
+	DecisionAlwaysAllow      Decision = "always_allow"       // 'A': always allow, saved to user policy
+	DecisionAllowAlways      Decision = "always_allow"       // alias for backward compatibility
+	DecisionDeny             Decision = "deny"               // 'n' or 'd': deny once
+	DecisionDenyWithFeedback Decision = "deny_with_feedback" // 'f': deny with user feedback
 )
 
 var (
@@ -39,8 +44,8 @@ type Session interface {
 	// Events delivers progress. Consumers MUST keep draining it. Each Send
 	// ends with exactly one terminal event (Done or Error).
 	Events() <-chan Event
-	// Respond answers an ApprovalRequested event.
-	Respond(approvalID string, d Decision) error
+	// Respond answers an ApprovalRequested event, optionally providing feedback on denial.
+	Respond(approvalID string, d Decision, feedback ...string) error
 	// Cancel aborts the running turn, if any.
 	Cancel()
 	// Usage returns the cumulative usage for the session.
@@ -51,6 +56,8 @@ type Session interface {
 	SetMode(m permission.Mode)
 	// Checkpointer returns the active checkpoint manager, if configured.
 	Checkpointer() Checkpointer
+	// PolicySet returns the active policy rules, if configured.
+	PolicySet() *policy.PolicySet
 	// SetProvider dynamically updates the active LLM provider.
 	SetProvider(p llm.Provider)
 	// Close cancels, waits for the turn to stop, then closes Events.
@@ -78,9 +85,13 @@ type Config struct {
 	Provider         llm.Provider
 	Tools            *tools.Registry
 	Policy           permission.Policy
+	PolicySet        *policy.PolicySet
+	AuditLogger      *audit.Logger
 	Checkpointer     Checkpointer
 	System           string
 	MaxTokens        int
 	MaxTurns         int // hard cap on model calls per Send; guards runaway tool loops (A-5)
 	MaxRepeatedCalls int // threshold for repeated identical tool calls (A-5)
+	IsHeadless       bool
+	AutoApprove      bool
 }

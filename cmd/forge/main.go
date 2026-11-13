@@ -16,6 +16,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/ayushpatil0810/forge/internal/agent"
+	"github.com/ayushpatil0810/forge/internal/audit"
 	"github.com/ayushpatil0810/forge/internal/checkpoint"
 	"github.com/ayushpatil0810/forge/internal/config"
 	"github.com/ayushpatil0810/forge/internal/credentials"
@@ -25,6 +26,7 @@ import (
 	"github.com/ayushpatil0810/forge/internal/llm/mock"
 	_ "github.com/ayushpatil0810/forge/internal/llm/openai"
 	"github.com/ayushpatil0810/forge/internal/permission"
+	"github.com/ayushpatil0810/forge/internal/policy"
 	"github.com/ayushpatil0810/forge/internal/session"
 	"github.com/ayushpatil0810/forge/internal/tools"
 	"github.com/ayushpatil0810/forge/internal/tui"
@@ -129,6 +131,8 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newUndoCmd())
 	cmd.AddCommand(newAuthCmd())
 	cmd.AddCommand(newSessionsCmd())
+	cmd.AddCommand(newPolicyCmd())
+	cmd.AddCommand(newAuditCmd())
 
 	return cmd
 }
@@ -502,12 +506,22 @@ func newSessionsCmd() *cobra.Command {
 		},
 	}
 
+	var deleteYes bool
 	deleteCmd := &cobra.Command{
 		Use:   "delete <session_id>",
 		Short: "Delete a session and all its stored history",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id := args[0]
+			if !deleteYes {
+				cmd.Printf("Are you sure you want to delete session %s? [y/N]: ", id)
+				var resp string
+				_, _ = fmt.Fscanln(cmd.InOrStdin(), &resp)
+				if strings.ToLower(strings.TrimSpace(resp)) != "y" && strings.ToLower(strings.TrimSpace(resp)) != "yes" {
+					cmd.Println("Deletion aborted.")
+					return nil
+				}
+			}
 			store, err := session.NewStore("")
 			if err != nil {
 				return ExitCodeError{Code: 1, Err: err}
@@ -521,12 +535,23 @@ func newSessionsCmd() *cobra.Command {
 			return nil
 		},
 	}
+	deleteCmd.Flags().BoolVarP(&deleteYes, "yes", "y", false, "skip confirmation prompt")
 
 	var olderThanDays int
+	var pruneYes bool
 	pruneCmd := &cobra.Command{
 		Use:   "prune",
 		Short: "Prune old sessions",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !pruneYes {
+				cmd.Printf("Are you sure you want to prune sessions older than %d days? [y/N]: ", olderThanDays)
+				var resp string
+				_, _ = fmt.Fscanln(cmd.InOrStdin(), &resp)
+				if strings.ToLower(strings.TrimSpace(resp)) != "y" && strings.ToLower(strings.TrimSpace(resp)) != "yes" {
+					cmd.Println("Prune aborted.")
+					return nil
+				}
+			}
 			store, err := session.NewStore("")
 			if err != nil {
 				return ExitCodeError{Code: 1, Err: err}
@@ -542,8 +567,29 @@ func newSessionsCmd() *cobra.Command {
 		},
 	}
 	pruneCmd.Flags().IntVar(&olderThanDays, "older-than", 30, "prune sessions older than N days")
+	pruneCmd.Flags().BoolVarP(&pruneYes, "yes", "y", false, "skip confirmation prompt")
 
-	cmd.AddCommand(listCmd, showCmd, deleteCmd, pruneCmd)
+	doctorCmd := &cobra.Command{
+		Use:   "doctor",
+		Short: "Run SQLite database integrity check",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := session.NewStore("")
+			if err != nil {
+				return ExitCodeError{Code: 1, Err: err}
+			}
+			defer func() { _ = store.Close() }()
+
+			res, err := store.Doctor(cmd.Context())
+			if err != nil {
+				cmd.PrintErrf("Database integrity error: %v\n", err)
+				return ExitCodeError{Code: 1, Err: err}
+			}
+			cmd.Printf("Database integrity: %s\n", res)
+			return nil
+		},
+	}
+
+	cmd.AddCommand(listCmd, showCmd, deleteCmd, pruneCmd, doctorCmd)
 	return cmd
 }
 
@@ -774,15 +820,61 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 		checkpointer = chkMgr.AsCheckpointer()
 	}
 
+	ps, err := loadEffectivePolicy(cfg.WorkspaceRoot)
+	if err != nil {
+		if errors.Is(err, policy.ErrInvalidPolicy) {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(2)
+		}
+	}
+	if ps != nil && len(ps.Warnings) > 0 {
+		for _, w := range ps.Warnings {
+			fmt.Fprintf(os.Stderr, "%s\n", w)
+		}
+	}
+
+	auditPath := ""
+	auditEnabled := true
+	auditRequired := false
+	auditMaxMB := 50
+	if cfg.Audit != nil {
+		if cfg.Audit.Enabled != nil {
+			auditEnabled = *cfg.Audit.Enabled
+		}
+		if cfg.Audit.Path != "" {
+			auditPath = cfg.Audit.Path
+		}
+		if cfg.Audit.MaxMB > 0 {
+			auditMaxMB = cfg.Audit.MaxMB
+		}
+		auditRequired = cfg.Audit.Required
+	}
+	if auditPath == "" {
+		if def, err := defaultAuditPath(cfg.WorkspaceRoot); err == nil {
+			auditPath = def
+		}
+	}
+	auditLogger := audit.New(audit.Config{
+		Enabled:  auditEnabled,
+		Path:     auditPath,
+		MaxMB:    auditMaxMB,
+		Required: auditRequired,
+		Root:     cfg.WorkspaceRoot,
+	})
+
 	s := agent.NewLocal(agent.Config{
 		ID:           sessionID,
 		History:      sessionHistory,
 		Provider:     provider,
 		Tools:        toolRegistry,
 		Policy:       permission.Policy{Mode: resolvedMode},
+		PolicySet:    ps,
+		AuditLogger:  auditLogger,
 		System:       systemPrompt,
 		MaxTurns:     cfg.MaxTurns,
 		Checkpointer: checkpointer,
+		IsHeadless:   true,
+		AutoApprove:  yesFlag || yoloFlag,
 	})
 	defer s.Close()
 
@@ -1122,12 +1214,56 @@ func runInteractive(ctx context.Context) error {
 		checkpointer = chkMgr.AsCheckpointer()
 	}
 
+	ps, err := loadEffectivePolicy(cfg.WorkspaceRoot)
+	if err != nil {
+		if errors.Is(err, policy.ErrInvalidPolicy) {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(2)
+		}
+	}
+	if ps != nil && len(ps.Warnings) > 0 {
+		for _, w := range ps.Warnings {
+			fmt.Fprintf(os.Stderr, "%s\n", w)
+		}
+	}
+
+	auditPath := ""
+	auditEnabled := true
+	auditRequired := false
+	auditMaxMB := 50
+	if cfg.Audit != nil {
+		if cfg.Audit.Enabled != nil {
+			auditEnabled = *cfg.Audit.Enabled
+		}
+		if cfg.Audit.Path != "" {
+			auditPath = cfg.Audit.Path
+		}
+		if cfg.Audit.MaxMB > 0 {
+			auditMaxMB = cfg.Audit.MaxMB
+		}
+		auditRequired = cfg.Audit.Required
+	}
+	if auditPath == "" {
+		if def, err := defaultAuditPath(cfg.WorkspaceRoot); err == nil {
+			auditPath = def
+		}
+	}
+	auditLogger := audit.New(audit.Config{
+		Enabled:  auditEnabled,
+		Path:     auditPath,
+		MaxMB:    auditMaxMB,
+		Required: auditRequired,
+		Root:     cfg.WorkspaceRoot,
+	})
+
 	s := agent.NewLocal(agent.Config{
 		ID:           sessionID,
 		History:      sessionHistory,
 		Provider:     provider,
 		Tools:        toolRegistry,
 		Policy:       permission.Policy{Mode: permMode},
+		PolicySet:    ps,
+		AuditLogger:  auditLogger,
 		System:       systemPrompt,
 		Checkpointer: checkpointer,
 	})

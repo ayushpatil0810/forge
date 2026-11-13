@@ -57,3 +57,36 @@ func ResolveInRoot(root, p string) (string, error) {
 
 	return target, nil
 }
+
+// IsCredentialPath checks if a path matches credential patterns:
+// .env*, .ssh/, .aws/, *.pem, *.key, id_rsa*, credentials files (SEC-5, P-6).
+func IsCredentialPath(p string) bool {
+	norm := filepath.ToSlash(strings.TrimSpace(p))
+	norm = strings.TrimPrefix(norm, "./")
+	norm = strings.TrimPrefix(norm, "/")
+	if norm == "" {
+		return false
+	}
+	base := filepath.Base(norm)
+	lowerNorm := strings.ToLower(norm)
+	lowerBase := strings.ToLower(base)
+
+	if strings.HasPrefix(lowerNorm, ".ssh/") || lowerNorm == ".ssh" ||
+		strings.HasPrefix(lowerNorm, ".aws/") || lowerNorm == ".aws" ||
+		strings.HasPrefix(lowerNorm, ".git/") || lowerNorm == ".git" {
+		return true
+	}
+	if strings.HasPrefix(lowerBase, ".env") {
+		return true
+	}
+	if strings.HasSuffix(lowerBase, ".pem") || strings.HasSuffix(lowerBase, ".key") {
+		return true
+	}
+	if strings.HasPrefix(lowerBase, "id_rsa") || strings.HasPrefix(lowerBase, "id_ed25519") || strings.HasPrefix(lowerBase, "id_ecdsa") {
+		return true
+	}
+	if lowerBase == "credentials" || lowerBase == "credentials.json" || lowerBase == "credentials.ini" {
+		return true
+	}
+	return false
+}

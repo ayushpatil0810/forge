@@ -165,11 +165,14 @@ type Model struct {
 	store           *session.Store
 	noSession       bool
 
-	pendingApproval  *agent.ApprovalRequestedPayload
-	showApprovalDiff bool
-	ctrlCPressed     bool
-	wizard           *WizardState
-	sessionPicker    *SessionPicker
+	pendingApproval       *agent.ApprovalRequestedPayload
+	showApprovalDiff      bool
+	previewingAlwaysAllow string
+	enteringFeedback      bool
+	feedbackText          string
+	ctrlCPressed          bool
+	wizard                *WizardState
+	sessionPicker         *SessionPicker
 }
 
 // New creates a new TUI model bound to a Session.
@@ -420,6 +423,58 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if m.pendingApproval != nil {
+			if m.enteringFeedback {
+				if msg.Type == tea.KeyEnter {
+					fb := m.feedbackText
+					_ = m.session.Respond(m.pendingApproval.ID, agent.DecisionDenyWithFeedback, fb)
+					m.enteringFeedback = false
+					m.feedbackText = ""
+					m.pendingApproval = nil
+					m.textarea.Focus()
+					m.updateViewportContent()
+					return m, nil
+				}
+				if msg.Type == tea.KeyEsc || msg.Type == tea.KeyCtrlC {
+					m.enteringFeedback = false
+					m.feedbackText = ""
+					m.updateViewportContent()
+					return m, nil
+				}
+				if msg.Type == tea.KeyBackspace {
+					if len(m.feedbackText) > 0 {
+						m.feedbackText = m.feedbackText[:len(m.feedbackText)-1]
+						m.updateViewportContent()
+					}
+					return m, nil
+				}
+				if msg.Type == tea.KeyRunes {
+					if len(m.feedbackText) < 500 {
+						m.feedbackText += string(msg.Runes)
+						m.updateViewportContent()
+					}
+					return m, nil
+				}
+				return m, nil
+			}
+
+			if m.previewingAlwaysAllow != "" {
+				switch msg.String() {
+				case "y", "Y":
+					_ = m.session.Respond(m.pendingApproval.ID, agent.DecisionAlwaysAllow)
+					m.previewingAlwaysAllow = ""
+					m.pendingApproval = nil
+					m.textarea.Focus()
+					m.updateViewportContent()
+					return m, nil
+				case "n", "N", "esc", "ctrl+c":
+					m.previewingAlwaysAllow = ""
+					m.updateViewportContent()
+					return m, nil
+				default:
+					return m, nil
+				}
+			}
+
 			switch msg.String() {
 			case "y", "Y":
 				_ = m.session.Respond(m.pendingApproval.ID, agent.DecisionAllow)
@@ -427,19 +482,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.textarea.Focus()
 				m.updateViewportContent()
 				return m, nil
-			case "a", "A":
-				if !m.pendingApproval.IsDangerous {
-					_ = m.session.Respond(m.pendingApproval.ID, agent.DecisionAllowAlways)
+			case "a":
+				if !m.pendingApproval.IsDangerous && !m.pendingApproval.IsProtected {
+					_ = m.session.Respond(m.pendingApproval.ID, agent.DecisionAllowSession)
 					m.pendingApproval = nil
 					m.textarea.Focus()
 					m.updateViewportContent()
 					return m, nil
 				}
 				return m, nil
-			case "n", "N":
+			case "A":
+				if !m.pendingApproval.IsDangerous && !m.pendingApproval.IsProtected {
+					rule := ""
+					if m.pendingApproval.Command != "" {
+						rule = fmt.Sprintf("bash(%s)", m.pendingApproval.Command)
+					} else if m.pendingApproval.Path != "" {
+						rule = fmt.Sprintf("edit(%s)", m.pendingApproval.Path)
+					} else {
+						rule = fmt.Sprintf("%s(*)", m.pendingApproval.Tool)
+					}
+					m.previewingAlwaysAllow = rule
+					m.updateViewportContent()
+					return m, nil
+				}
+				return m, nil
+			case "n", "N", "d", "D":
 				_ = m.session.Respond(m.pendingApproval.ID, agent.DecisionDeny)
 				m.pendingApproval = nil
 				m.textarea.Focus()
+				m.updateViewportContent()
+				return m, nil
+			case "f", "F":
+				m.enteringFeedback = true
+				m.feedbackText = ""
 				m.updateViewportContent()
 				return m, nil
 			case "e", "E":
@@ -509,6 +584,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			input := strings.TrimSpace(m.textarea.Value())
 			if input == "" || m.isStreaming {
+				return m, nil
+			}
+
+			if input == "/policy" || strings.HasPrefix(input, "/policy") {
+				m.items = append(m.items, userMessage{text: input})
+				m.textarea.Reset()
+				ps := m.session.PolicySet()
+				if ps == nil {
+					m.items = append(m.items, systemMessage{text: "No policy files configured."})
+				} else {
+					var sb strings.Builder
+					sb.WriteString("Active Policy Rules:\n\n")
+					if len(ps.UserRules) > 0 {
+						sb.WriteString("User Rules (~/.forge/policy.json):\n")
+						for _, r := range ps.UserRules {
+							fmt.Fprintf(&sb, "  • [%s] %s\n", r.Action, r.Raw)
+						}
+						sb.WriteString("\n")
+					} else {
+						sb.WriteString("User Rules: none\n\n")
+					}
+					if len(ps.ProjectRules) > 0 {
+						sb.WriteString("Project Rules (<workspace>/.forge/policy.json):\n")
+						for _, r := range ps.ProjectRules {
+							fmt.Fprintf(&sb, "  • [%s] %s\n", r.Action, r.Raw)
+						}
+						sb.WriteString("\n")
+					} else {
+						sb.WriteString("Project Rules: none\n\n")
+					}
+					if len(ps.Warnings) > 0 {
+						sb.WriteString("Warnings:\n")
+						for _, w := range ps.Warnings {
+							fmt.Fprintf(&sb, "  ⚠ %s\n", w)
+						}
+					}
+					m.items = append(m.items, systemMessage{text: strings.TrimSpace(sb.String())})
+				}
+				m.updateViewportContent()
 				return m, nil
 			}
 
@@ -786,6 +900,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Content:   input,
 					CreatedAt: time.Now(),
 				})
+				_ = m.store.UpdateSessionTitle(context.Background(), m.session.ID(), input)
 			}
 
 			if err := m.session.Send(context.Background(), input); err != nil {
@@ -1083,8 +1198,15 @@ func (m *Model) updateViewportContent() {
 		if fullText.Len() > 0 {
 			fullText.WriteString("\n\n")
 		}
-		modeStr := string(m.session.Mode())
-		card := RenderApprovalCard(m.pendingApproval, modeStr, m.showApprovalDiff, renderWidth, m.styles)
+		var card string
+		if m.enteringFeedback {
+			card = RenderFeedbackCard(m.feedbackText, renderWidth, m.styles)
+		} else if m.previewingAlwaysAllow != "" {
+			card = RenderAlwaysAllowPreviewCard(m.previewingAlwaysAllow, renderWidth, m.styles)
+		} else {
+			modeStr := string(m.session.Mode())
+			card = RenderApprovalCard(m.pendingApproval, modeStr, m.showApprovalDiff, renderWidth, m.styles)
+		}
 		fullText.WriteString(card)
 	}
 

@@ -53,10 +53,12 @@ func RenderApprovalCard(app *agent.ApprovalRequestedPayload, mode string, showDi
 
 	var actionItems []string
 	actionItems = append(actionItems, styles.ToolCardSuccess.Bold(true).Render("[y] Approve"))
-	if !app.IsDangerous {
+	if !app.IsDangerous && !app.IsProtected {
 		actionItems = append(actionItems, styles.ToolCardSuccess.Render("[a] Session allow"))
+		actionItems = append(actionItems, styles.ToolCardSuccess.Render("[A] Always allow"))
 	}
 	actionItems = append(actionItems, styles.ToolCardError.Bold(true).Render("[n] Reject"))
+	actionItems = append(actionItems, styles.ToolCardError.Render("[f] Feedback"))
 	if app.Diff != "" {
 		actionItems = append(actionItems, styles.SystemInfo.Render("[e] Diff"))
 	}
@@ -68,6 +70,38 @@ func RenderApprovalCard(app *agent.ApprovalRequestedPayload, mode string, showDi
 		Padding(0, 1).
 		Width(boxWidth)
 
+	return boxStyle.Render(sb.String())
+}
+
+// RenderAlwaysAllowPreviewCard renders the preview card for saving a rule to user policy.
+func RenderAlwaysAllowPreviewCard(rule string, width int, styles Styles) string {
+	boxWidth := width - 4
+	if boxWidth < 40 {
+		boxWidth = 40
+	}
+	var sb strings.Builder
+	sb.WriteString(styles.ToolCardSuccess.Bold(true).Render("[A] Save Rule to User Policy?\n\n"))
+	fmt.Fprintf(&sb, "Rule to persist: %s\n\n", styles.AssistantText.Bold(true).Render(rule))
+	sb.WriteString(styles.SystemInfo.Render("This rule will be saved to your user policy (~/.forge/policy.json)\nand will automatically allow matching actions in future sessions.\n\n"))
+	sb.WriteString(styles.ToolCardSuccess.Bold(true).Render("[y] Confirm and Save") + "  " + styles.ToolCardError.Render("[n/Esc] Cancel"))
+
+	boxStyle := styles.BorderBox.Padding(0, 1).Width(boxWidth)
+	return boxStyle.Render(sb.String())
+}
+
+// RenderFeedbackCard renders the prompt card for entering rejection feedback.
+func RenderFeedbackCard(currentText string, width int, styles Styles) string {
+	boxWidth := width - 4
+	if boxWidth < 40 {
+		boxWidth = 40
+	}
+	var sb strings.Builder
+	sb.WriteString(styles.ToolCardError.Bold(true).Render("[f] Deny With Feedback\n\n"))
+	sb.WriteString("Feedback to send to model (max 500 chars):\n")
+	fmt.Fprintf(&sb, "> %s\n\n", currentText)
+	sb.WriteString(styles.ToolCardSuccess.Bold(true).Render("[Enter] Submit Denial") + "  " + styles.ToolCardError.Render("[Esc] Cancel"))
+
+	boxStyle := styles.BorderBox.Padding(0, 1).Width(boxWidth)
 	return boxStyle.Render(sb.String())
 }
 

@@ -64,6 +64,7 @@ type ApprovalRequestedPayload struct {
 	Input          string `json:"input"`
 	Description    string `json:"description,omitempty"`
 	Diff           string `json:"diff,omitempty"`
+	Path           string `json:"path,omitempty"`
 	Command        string `json:"command,omitempty"`
 	Cwd            string `json:"cwd,omitempty"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`

@@ -55,6 +55,11 @@ var DefaultDangerousRules = []DangerousRule{
 		Description: "modification or overwrite targeting .git directory or credentials (.env, .ssh, .aws)",
 	},
 	{
+		Name:        "credential_read",
+		Pattern:     regexp.MustCompile(`(?i)\b(?:cat|type|Get-Content|gc|head|tail)\b.*(?:\.env(?:\.|$|\s|")|\.(?:ssh|aws)[/\\]|id_rsa|\.pem\b|\.key\b|credentials)`),
+		Description: "attempted command-line read of credential file (.env, .ssh, .aws, key, pem, credentials)",
+	},
+	{
 		Name:        "outside_workspace",
 		Pattern:     regexp.MustCompile(`(?i)(?:\.\.[/\\]|[/\\]etc[/\\]|[/\\]var[/\\]|[/\\]usr[/\\]|[/\\]root\b|[a-z]:\\Windows|[a-z]:\\Program Files)`),
 		Description: "reference to system directories or path traversal outside workspace",

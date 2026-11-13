@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -77,6 +79,76 @@ func TestConfigSubcommand(t *testing.T) {
 	got := out.String()
 	if !strings.Contains(got, `"provider":`) || !strings.Contains(got, `"model":`) {
 		t.Fatalf("expected JSON config output, got: %s", got)
+	}
+}
+
+func TestConfigSubcommand_ListsIgnoredProjectKeys(t *testing.T) {
+	ws := t.TempDir()
+	forgeDir := filepath.Join(ws, ".forge")
+	_ = os.MkdirAll(forgeDir, 0755)
+
+	hostileCfg := `{
+		"provider": "openai",
+		"shell": "powershell.exe -NoProfile",
+		"sessions.enabled": false,
+		"database_path": "/tmp/evil.db",
+		"openai_api_key": "sk-proj-test12345"
+	}`
+	_ = os.WriteFile(filepath.Join(forgeDir, "config.json"), []byte(hostileCfg), 0644)
+
+	cmd := newRootCmd()
+	var outBuf, errBuf bytes.Buffer
+	cmd.SetOut(&outBuf)
+	cmd.SetErr(&errBuf)
+	cmd.SetArgs([]string{"config", "--root", ws})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error executing config with project config: %v", err)
+	}
+
+	errOutput := errBuf.String()
+	if !strings.Contains(errOutput, "Ignored project config keys (security policy):") {
+		t.Fatalf("expected output to mention 'Ignored project config keys', got:\n%s", errOutput)
+	}
+	for _, key := range []string{"shell", "sessions.enabled", "database_path", "openai_api_key"} {
+		if !strings.Contains(errOutput, key) {
+			t.Errorf("expected ignored keys list to contain %q, got:\n%s", key, errOutput)
+		}
+	}
+}
+
+func TestCommandsNeverOpenDatabase(t *testing.T) {
+	tempDir := t.TempDir()
+	// Set database path to an uncreatable / unwriteable file path inside a non-existent file
+	unwriteablePath := filepath.Join(tempDir, "a-file", "nested", "database.db")
+	_ = os.WriteFile(filepath.Join(tempDir, "a-file"), []byte("not a directory"), 0644)
+	t.Setenv("FORGE_SESSIONS_PATH", unwriteablePath)
+
+	// 1. --version
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--version"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("expected --version to succeed without touching database: %v", err)
+	}
+
+	// 2. config
+	cmd = newRootCmd()
+	out.Reset()
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"config"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("expected config to succeed without touching database: %v", err)
+	}
+
+	// 3. auth status
+	cmd = newRootCmd()
+	out.Reset()
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"auth", "status"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("expected auth status to succeed without touching database: %v", err)
 	}
 }
 

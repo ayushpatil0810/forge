@@ -52,7 +52,20 @@ func (ReadFile) Schema() json.RawMessage {
 	return json.RawMessage(readFileSchema)
 }
 
-func (ReadFile) NeedsApproval(json.RawMessage) ApprovalRequest {
+func (r ReadFile) NeedsApproval(input json.RawMessage) ApprovalRequest {
+	var args struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return ApprovalRequest{}
+	}
+	if IsCredentialPath(args.Path) {
+		return ApprovalRequest{
+			Description: fmt.Sprintf("Read credential file %s", args.Path),
+			IsProtected: true,
+			Path:        args.Path,
+		}
+	}
 	return ApprovalRequest{}
 }
 

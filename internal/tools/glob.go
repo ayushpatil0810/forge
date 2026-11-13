@@ -77,9 +77,14 @@ func (g Glob) Run(_ context.Context, input json.RawMessage) (Result, error) {
 
 	var results []string
 	truncated := 0
+	skippedCredentials := 0
 
 	for _, m := range matches {
 		if IsIgnored(ign, m) {
+			continue
+		}
+		if IsCredentialPath(m) {
+			skippedCredentials++
 			continue
 		}
 		// Confirm path is inside root via ResolveInRoot
@@ -97,7 +102,11 @@ func (g Glob) Run(_ context.Context, input json.RawMessage) (Result, error) {
 	sort.Strings(results)
 
 	if len(results) == 0 {
-		return Result{Output: "No files matched the pattern"}, nil
+		out := "No files matched the pattern"
+		if skippedCredentials > 0 {
+			out += fmt.Sprintf("\n(skipped %d credential files)", skippedCredentials)
+		}
+		return Result{Output: out}, nil
 	}
 
 	var b strings.Builder
@@ -107,6 +116,9 @@ func (g Glob) Run(_ context.Context, input json.RawMessage) (Result, error) {
 	}
 	if truncated > 0 {
 		fmt.Fprintf(&b, "... [%d more matching files truncated; cap is %d entries. Narrow your pattern]\n", truncated, MaxGlobEntries)
+	}
+	if skippedCredentials > 0 {
+		fmt.Fprintf(&b, "(skipped %d credential files)\n", skippedCredentials)
 	}
 
 	return Result{Output: strings.TrimRight(b.String(), "\n")}, nil

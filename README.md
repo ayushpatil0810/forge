@@ -203,7 +203,10 @@ Forge provides four permission policies to give you exact control over tool exec
 - **SEC-1**: File contents, tool outputs, and command outputs are treated as untrusted data, never as system instructions.
 - **SEC-2**: The `yolo` mode is deliberately unreachable via in-app mode cycling (`Tab`). It can only be activated at startup via `--yolo` and displays a persistent warning banner.
 - **SEC-3**: Dangerous command heuristic intercepts destructive operations (`rm -rf /`, `git reset --hard`, `git push --force`, `dd`, `curl|sh`, tampering with `.git/` or `.env*`).
+- **SEC-5**: High-confidence secret redactor masks private keys, AWS tokens, GitHub PATs, and LLM API keys in tool outputs before reaching the model, UI, session database, or audit log.
 - **SEC-6**: API keys and tokens are never read from or written to project-level configuration files.
+- **P-3 to P-5**: Fine-grained policy engine (`forge policy`) supporting `allow`, `deny`, and `ask` rules. Untrusted repository policies cannot add `allow` rules.
+- **P-7**: Tamper-evident JSONL audit logging (`forge audit`) with per-session cryptographic SHA-256 hash chains.
 
 ---
 
@@ -217,7 +220,7 @@ To inspect the effective resolved configuration for your current workspace:
 forge config
 ```
 
-For the complete schema, environment variables, local Ollama setup, and precedence table, see [docs/configuration.md](docs/configuration.md).
+For the complete schema, environment variables, local Ollama setup, and precedence table, see [docs/configuration.md](docs/configuration.md). For security policies, see [docs/policy.md](docs/policy.md) and [docs/audit.md](docs/audit.md).
 
 ---
 
@@ -235,7 +238,8 @@ For the complete schema, environment variables, local Ollama setup, and preceden
 | **Slice 6: Hardening & Release** | `DOING` | Layered config, themes, error guidance, goreleaser (awaiting fresh machine check and demo recording) |
 | **Slice 7: Checkpoints & Undo** | `DOING` | Shadow Git repo, atomic rollback, benchmarked on 10k files (awaiting live run) |
 | **Slice 8: Onboarding & Credentials** | `DOING` | OS keychain storage, `forge auth`, provider profiles, local runtimes, first-run wizard (awaiting live run) |
-| **Slice 9: Sessions & Persistence** | `DONE` | SQLite persistence, crash-safety synthesis, resume CLI & picker, undo continuity |
+| **Slice 9: Sessions & Persistence** | `DOING` | SQLite persistence, crash-safety synthesis, resume CLI & picker, undo continuity (awaiting live run) |
+| **Slice 9a: Policy & Audit Log** | `DOING` | Layered policy files, tamper-evident audit log, secrets redaction (awaiting live run) |
 | **Desktop App (Wails)** | `PARKED` | Planned for Phase 2 |
 | **LSP Integration** | `PARKED` | Planned for Phase 2 |
 

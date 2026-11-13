@@ -12,6 +12,8 @@ import (
 	"github.com/ayushpatil0810/forge/internal/llm"
 	"github.com/ayushpatil0810/forge/internal/llm/retry"
 	"github.com/ayushpatil0810/forge/internal/permission"
+	"github.com/ayushpatil0810/forge/internal/policy"
+	"github.com/ayushpatil0810/forge/internal/redact"
 	"github.com/ayushpatil0810/forge/internal/tools"
 )
 
@@ -41,10 +43,15 @@ func NewLocal(cfg Config) Session {
 		cfg:     cfg,
 		events:  make(chan Event, 256),
 		closed:  make(chan struct{}),
-		pending: map[string]chan Decision{},
+		pending: map[string]chan approvalResponse{},
 		always:  map[string]bool{},
 		history: cfg.History,
 	}
+}
+
+type approvalResponse struct {
+	decision Decision
+	feedback string
 }
 
 type local struct {
@@ -60,7 +67,7 @@ type local struct {
 	running    bool
 	isClosed   bool
 	cancel     context.CancelFunc
-	pending    map[string]chan Decision
+	pending    map[string]chan approvalResponse
 	always     map[string]bool
 	usage      UsageUpdatedPayload
 	closeOnce  sync.Once
@@ -71,6 +78,8 @@ type local struct {
 }
 
 func (s *local) ID() string { return s.id }
+
+func (s *local) PolicySet() *policy.PolicySet { return s.cfg.PolicySet }
 
 func (s *local) Events() <-chan Event { return s.events }
 
@@ -143,7 +152,7 @@ func (s *local) Close() {
 	})
 }
 
-func (s *local) Respond(id string, d Decision) error {
+func (s *local) Respond(id string, d Decision, feedback ...string) error {
 	s.mu.Lock()
 	ch, ok := s.pending[id]
 	delete(s.pending, id)
@@ -151,7 +160,11 @@ func (s *local) Respond(id string, d Decision) error {
 	if !ok {
 		return ErrUnknownApproval
 	}
-	ch <- d // buffered(1): never blocks
+	fb := ""
+	if len(feedback) > 0 {
+		fb = feedback[0]
+	}
+	ch <- approvalResponse{decision: d, feedback: fb} // buffered(1): never blocks
 	return nil
 }
 
@@ -362,26 +375,88 @@ func (s *local) runToolCall(ctx context.Context, c llm.ToolCall) llm.Message {
 	}
 
 	appReq := t.NeedsApproval(c.Input)
-	verdict := s.cfg.Policy.Check(c.Name, appReq)
-	if verdict == permission.Ask && s.isAlwaysAllowed(c.Name) {
-		verdict = permission.Allow
+	var evalRes policy.EvalResult
+	if s.cfg.PolicySet != nil {
+		evalRes = policy.Evaluate(policy.EvalRequest{
+			ToolName:    c.Name,
+			Input:       string(c.Input),
+			Path:        appReq.Path,
+			Command:     appReq.Command,
+			IsProtected: appReq.IsProtected,
+			IsDangerous: appReq.IsDangerous,
+			Mode:        s.Mode(),
+			IsHeadless:  s.cfg.IsHeadless,
+			AutoApprove: s.cfg.AutoApprove,
+		}, s.cfg.PolicySet)
+	} else {
+		verdict := s.cfg.Policy.Check(c.Name, appReq)
+		evalRes = policy.EvalResult{
+			Verdict: verdict,
+			Source:  "mode",
+		}
 	}
 
-	switch verdict {
+	if evalRes.Verdict == permission.Ask && s.isAlwaysAllowed(c.Name) && !evalRes.IsFloor {
+		evalRes.Verdict = permission.Allow
+		evalRes.Source = "session"
+	}
+
+	switch evalRes.Verdict {
 	case permission.Deny:
+		if s.cfg.AuditLogger != nil {
+			_ = s.cfg.AuditLogger.Log(ctx, s.id, "decision", c.Name, string(c.Input), "deny", evalRes.Source, nil, nil, "")
+		}
 		return result(ToolDenied, "denied by permission policy", "denied by permission policy", time.Time{})
 	case permission.Ask:
-		d, err := s.awaitApproval(ctx, c.ID, c.Name, string(c.Input), appReq)
+		if evalRes.IsFloor {
+			appReq.IsDangerous = true
+		}
+		resp, err := s.awaitApproval(ctx, c.ID, c.Name, string(c.Input), appReq)
 		if err != nil {
 			return result(ToolCancelled, "cancelled by user", "cancelled by user", time.Time{})
 		}
-		if d == DecisionDeny {
+		switch resp.decision {
+		case DecisionDeny:
+			if s.cfg.AuditLogger != nil {
+				_ = s.cfg.AuditLogger.Log(ctx, s.id, "decision", c.Name, string(c.Input), "deny", "user", nil, nil, "")
+			}
 			return result(ToolDenied, "the user denied this action", "the user denied this action", time.Time{})
-		}
-		if d == DecisionAllowAlways {
+		case DecisionDenyWithFeedback:
+			fb := redact.Redact(resp.feedback)
+			if len(fb) > 500 {
+				fb = fb[:500]
+			}
+			if s.cfg.AuditLogger != nil {
+				_ = s.cfg.AuditLogger.Log(ctx, s.id, "decision", c.Name, string(c.Input), "deny", "user-feedback", nil, nil, "")
+			}
+			msg := "the user denied this action: " + fb
+			return result(ToolDenied, msg, msg, time.Time{})
+		case DecisionAllowSession:
 			s.mu.Lock()
 			s.always[c.Name] = true
 			s.mu.Unlock()
+			if s.cfg.AuditLogger != nil {
+				_ = s.cfg.AuditLogger.Log(ctx, s.id, "decision", c.Name, string(c.Input), "allow", "session", nil, nil, "")
+			}
+		case DecisionAlwaysAllow:
+			if s.cfg.PolicySet != nil {
+				ruleStr := generateNarrowRule(c.Name, string(c.Input), appReq)
+				_ = s.cfg.PolicySet.AddRule(policy.ScopeUser, policy.ActionAllow, ruleStr)
+			}
+			s.mu.Lock()
+			s.always[c.Name] = true
+			s.mu.Unlock()
+			if s.cfg.AuditLogger != nil {
+				_ = s.cfg.AuditLogger.Log(ctx, s.id, "decision", c.Name, string(c.Input), "allow", "user-saved", nil, nil, "")
+			}
+		default: // DecisionAllow
+			if s.cfg.AuditLogger != nil {
+				_ = s.cfg.AuditLogger.Log(ctx, s.id, "decision", c.Name, string(c.Input), "allow", "user", nil, nil, "")
+			}
+		}
+	case permission.Allow:
+		if s.cfg.AuditLogger != nil {
+			_ = s.cfg.AuditLogger.Log(ctx, s.id, "decision", c.Name, string(c.Input), "allow", evalRes.Source, nil, nil, "")
 		}
 	}
 
@@ -429,11 +504,63 @@ func (s *local) runToolCall(ctx context.Context, c llm.ToolCall) llm.Message {
 	if err != nil {
 		return result(ToolError, err.Error(), err.Error(), start)
 	}
-	out := truncate(res.Output, maxToolOutput)
+	cleanOutput := redact.Redact(res.Output)
+	out := truncate(cleanOutput, maxToolOutput)
+
+	var exitCode *int
+	if res.IsError {
+		ec := 1
+		exitCode = &ec
+	} else {
+		ec := 0
+		exitCode = &ec
+	}
+	durMs := time.Since(start).Milliseconds()
+
+	if s.cfg.AuditLogger != nil {
+		_ = s.cfg.AuditLogger.Log(ctx, s.id, "tool_result", c.Name, string(c.Input), "", "", exitCode, &durMs, cleanOutput)
+	}
+
 	if res.IsError {
 		return result(ToolError, out, out, start)
 	}
 	return result(ToolOK, out, "", start)
+}
+
+func generateNarrowRule(toolName, input string, req tools.ApprovalRequest) string {
+	switch toolName {
+	case "bash":
+		if req.Command != "" {
+			return fmt.Sprintf("bash(%s)", req.Command)
+		}
+		var args struct {
+			Command string `json:"command"`
+		}
+		_ = json.Unmarshal([]byte(input), &args)
+		return fmt.Sprintf("bash(%s)", args.Command)
+	case "edit_file", "write_file":
+		p := req.Path
+		if p == "" {
+			var args struct {
+				Path string `json:"path"`
+			}
+			_ = json.Unmarshal([]byte(input), &args)
+			p = args.Path
+		}
+		return fmt.Sprintf("edit(%s)", p)
+	case "read_file":
+		p := req.Path
+		if p == "" {
+			var args struct {
+				Path string `json:"path"`
+			}
+			_ = json.Unmarshal([]byte(input), &args)
+			p = args.Path
+		}
+		return fmt.Sprintf("read(%s)", p)
+	default:
+		return fmt.Sprintf("%s(*)", toolName)
+	}
 }
 
 func isMutatingTool(name string) bool {
@@ -446,8 +573,8 @@ func (s *local) isAlwaysAllowed(name string) bool {
 	return s.always[name]
 }
 
-func (s *local) awaitApproval(ctx context.Context, id, name, input string, req tools.ApprovalRequest) (Decision, error) {
-	ch := make(chan Decision, 1)
+func (s *local) awaitApproval(ctx context.Context, id, name, input string, req tools.ApprovalRequest) (approvalResponse, error) {
+	ch := make(chan approvalResponse, 1)
 	s.mu.Lock()
 	s.pending[id] = ch
 	s.mu.Unlock()
@@ -460,6 +587,7 @@ func (s *local) awaitApproval(ctx context.Context, id, name, input string, req t
 			Input:          input,
 			Description:    req.Description,
 			Diff:           req.Diff,
+			Path:           req.Path,
 			Command:        req.Command,
 			Cwd:            req.Cwd,
 			TimeoutSeconds: req.TimeoutSeconds,
@@ -475,9 +603,9 @@ func (s *local) awaitApproval(ctx context.Context, id, name, input string, req t
 		s.mu.Lock()
 		delete(s.pending, id)
 		s.mu.Unlock()
-		return DecisionDeny, ctx.Err()
+		return approvalResponse{decision: DecisionDeny}, ctx.Err()
 	case <-s.closed:
-		return DecisionDeny, ErrClosed
+		return approvalResponse{decision: DecisionDeny}, ErrClosed
 	}
 }
 

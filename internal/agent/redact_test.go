@@ -14,19 +14,19 @@ func TestRedactSecrets(t *testing.T) {
 	}{
 		{
 			input: "Error with key sk-ant-api03-actual-secret-key-123456789 in request",
-			want:  "[REDACTED ANTHROPIC_API_KEY]",
+			want:  "[REDACTED:api_key]",
 		},
 		{
 			input: "Failed using openai key sk-proj-abcdef12345678901234567890",
-			want:  "sk-proj-***",
+			want:  "[REDACTED:openai_key]",
 		},
 		{
 			input: "Google API error with AIzaSyD1234567890abcdef1234567890ab",
-			want:  "AIza***",
+			want:  "[REDACTED:gemini_key]",
 		},
 		{
 			input: "GitHub auth failed for ghp_0123456789abcdefghijklmnopqrstuvwxyz",
-			want:  "gh***",
+			want:  "[REDACTED:github_token]",
 		},
 		{
 			input: "Safe message: file not found at path /src/main.go",

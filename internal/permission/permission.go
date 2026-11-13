@@ -30,6 +30,10 @@ func (p Policy) Check(toolName string, req tools.ApprovalRequest) Verdict {
 	if !req.Required() {
 		return Allow
 	}
+	// Reads of credential-pattern files via read_file require approval in every mode, including plan (SEC-5, P-6)
+	if (toolName == "read_file" || toolName == "read") && req.IsProtected {
+		return Ask
+	}
 	// In plan mode, all mutating and execution operations are denied (read-only)
 	if p.Mode == ModePlan {
 		return Deny

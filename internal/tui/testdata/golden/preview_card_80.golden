@@ -1,0 +1,11 @@
+╭────────────────────────────────────────────────────────────────────────────╮
+│ [A] Save Rule to User Policy?                                              │
+│                                                                            │
+│                              Rule to persist: bash(go test -v ./...)       │
+│                                                                            │
+│ This rule will be saved to your user policy (~/.forge/policy.json)         │
+│ and will automatically allow matching actions in future sessions.          │
+│                                                                            │
+│                                                                   [y]      │
+│ Confirm and Save  [n/Esc] Cancel                                           │
+╰────────────────────────────────────────────────────────────────────────────╯

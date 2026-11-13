@@ -105,6 +105,7 @@ func (g Grep) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 
 	var matches []string
 	truncated := 0
+	skippedCredentials := 0
 
 	searchFile := func(fullPath string) error {
 		if ctx.Err() != nil {
@@ -118,6 +119,10 @@ func (g Grep) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 		relSlash := filepath.ToSlash(relToRoot)
 
 		if IsIgnored(ign, relSlash) {
+			return nil
+		}
+		if IsCredentialPath(relSlash) {
+			skippedCredentials++
 			return nil
 		}
 
@@ -187,6 +192,14 @@ func (g Grep) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 				return nil
 			}
 
+			if p != g.Root && IsCredentialPath(relSlash) {
+				skippedCredentials++
+				if d.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
+			}
+
 			if d.IsDir() {
 				return nil
 			}
@@ -199,7 +212,11 @@ func (g Grep) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 	}
 
 	if len(matches) == 0 {
-		return Result{Output: "No matches found"}, nil
+		out := "No matches found"
+		if skippedCredentials > 0 {
+			out += fmt.Sprintf("\n(skipped %d credential files)", skippedCredentials)
+		}
+		return Result{Output: out}, nil
 	}
 
 	var b strings.Builder
@@ -209,6 +226,9 @@ func (g Grep) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 	}
 	if truncated > 0 {
 		fmt.Fprintf(&b, "... [%d more matches truncated; cap is %d. Use more specific query or path filter]\n", truncated, MaxGrepMatches)
+	}
+	if skippedCredentials > 0 {
+		fmt.Fprintf(&b, "(skipped %d credential files)\n", skippedCredentials)
 	}
 
 	return Result{Output: strings.TrimRight(b.String(), "\n")}, nil

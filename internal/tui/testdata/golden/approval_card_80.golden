@@ -1,0 +1,10 @@
+╭────────────────────────────────────────────────────────────────────────────╮
+│ [!] Approval Required                                                      │
+│ bash: $ go test -v ./...                                                   │
+│   cwd: /workspace                                                          │
+│   timeout: 30s                                                             │
+│   purpose: Run package unit tests                                          │
+│                                                                            │
+│ [y] Approve  [a] Session allow  [A] Always allow  [n] Reject  [f] Feedback │
+│ [Tab] Mode: ask                                                            │
+╰────────────────────────────────────────────────────────────────────────────╯

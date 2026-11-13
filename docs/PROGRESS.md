@@ -29,7 +29,7 @@
 
 ## 1. Current focus
 
-> Slice 9 (SQLite Session Persistence & Resumption) is DONE. Slice 3b is DONE (OpenAI verified live; Anthropic and Gemini experimental, not live-verified). Slices 6, 7, 8 are DOING awaiting human verification (fresh-machine check, demo recording, live `/undo` run, live `forge auth` run). Phase 2 slices (9a–13) amended per approved order (build nothing until human verification).
+> Slice 9a (Policy file, audit log and secret handling) is implemented and its automated exit check passed. Awaiting human live verification per `docs/VERIFY.md` across CI (ISSUE-2), Slice 6 (fresh-machine check, demo recording), Slice 7 (`/undo`), Slice 8 (`forge auth`), Slice 9 (resumption), and Slice 9a (policy & audit).
 
 ---
 
@@ -186,7 +186,7 @@ _Goal: secure credential management, local model detection, first-run wizard, an
 
 **Exit check:** `internal/tui/auth_teatest_test.go:TestSlice8_RealAuthTeatestExitCheck` passes under `-race`, testing local profile setup, hosted profile with fake key masked and asserted absent everywhere (view, golden snapshot, error strings, `forge config`, `forge auth status`, disk files), env override, and logout; awaiting user live run.
 
-### Slice 9: SQLite session persistence and resume `DONE`
+### Slice 9: SQLite session persistence and resume `DOING (awaiting live run)`
 
 _Goal: resilient session persistence in pure Go SQLite, crash recovery, and instant CLI/TUI resumption._
 
@@ -200,20 +200,36 @@ _Goal: resilient session persistence in pure Go SQLite, crash recovery, and inst
 - [x] Safe mode reset on resume (never restore `yolo`, resume in `ask`)
 - [x] Empty read-before-write tracker on resume with injected `[Resumed session...]` system note
 - [x] Undo continuity: `/undo` reverts pre-resume edits in shadow git repo
-- [x] CLI management: `forge sessions list`, `forge sessions show`, `forge sessions delete`, `forge sessions prune`
+- [x] CLI management: `forge sessions list`, `forge sessions show`, `forge sessions delete`, `forge sessions prune`, `forge sessions doctor`
 - [x] Documentation: `docs/sessions.md`, `README.md`, `docs/configuration.md`, `docs/COVERAGE.md`
 
-**Exit check:** `cmd/forge/session_exit_test.go:TestSlice9_SessionPersistenceAndResumeExitCheck` passes under `-race`, verifying multi-turn file edits, SQLite persistence, resumption fidelity, `/undo` continuity reverting pre-resume edits, and follow-up turn context; `cmd/forge/session_cmd_test.go` verifies CLI subcommands.
+**Exit check:** `cmd/forge/session_exit_test.go:TestSlice9_SessionPersistenceAndResumeExitCheck` passes under `-race`, verifying multi-turn file edits, SQLite persistence, resumption fidelity, `/undo` continuity reverting pre-resume edits, and follow-up turn context; `cmd/forge/session_cmd_test.go` verifies CLI subcommands; awaiting user live run.
+
+### Slice 9a: Policy file, audit log and secret handling `DOING (automated tests complete; awaiting live run)`
+
+_Goal: pre-approve routine actions safely, block dangerous actions unconditionally, and maintain an immutable, tamper-evident audit log._
+
+- [x] User policy (`~/.forge/policy.json`) and project policy (`.forge/policy.json`) loaded and merged (`P-4`)
+- [x] Untrusted repository defense: project policy `allow` rules strictly ignored with visible warning (`P-4`)
+- [x] Hard safety floor: dangerous commands, protected paths, opaque bash commands, and argument hazards never auto-allowed
+- [x] Deny rules precedence across all modes including `yolo` (`P-5`)
+- [x] Shell analysis: segment splitting on `;`, `&&`, `||`, `|`, `&`, `\n`, opacity classification, argument hazards (`go test -exec`, `git -c`, etc.)
+- [x] Path matching: `**` globs, canonical confinement, Windows case-insensitivity
+- [x] Secret reads: credential files (`.env*`, `.ssh/`, `.aws/`, `*.pem`, `*.key`, `id_rsa*`) via `read_file` prompt in all modes (including plan); headless auto-denies; `grep` and `glob` skip credential files and report count (`SEC-5`, `P-6`)
+- [x] High-confidence secret redaction (`[REDACTED:<type>]`) in tool outputs, UI, database, and audit log (`SEC-5`)
+- [x] All 5 approval keys: `y` (once), `a` (session), `A` (always allow, preview card, user policy save), `n`/`d` (deny), `f` (deny with feedback capped at 500 chars and redacted) (`P-3`)
+- [x] CLI policy management: `forge policy list`, `forge policy check`, `forge policy add`, `forge policy remove`, TUI `/policy`
+- [x] JSONL audit logging (`~/.forge/audit/<hash>.jsonl`, 0600), rotation at `audit.max_mb`, fail-closed with `audit.required`, cryptographic per-session SHA-256 hash chains (`P-7`)
+- [x] CLI audit management: `forge audit show`, `forge audit verify` (detects modification, deletion, reordering)
+- [x] Documentation: `docs/policy.md`, `docs/audit.md`, `docs/VERIFY.md`, `docs/configuration.md`, `README.md`, `docs/COVERAGE.md`, `docs/SPEC.md`
+
+**Exit check:** `cmd/forge/policy_audit_exit_test.go:TestSlice9a_AutomatedExitCheck` passes under `-race`, verifying policy evaluation hierarchy, untrusted project allow rejection, argument hazard floor, deny precedence in YOLO, headless auto-denial, audit log generation with decision sources, and cryptographic tamper verification; awaiting user live run.
 
 ---
 
-### Phase 2 Plan (Plan Only - Build Nothing Until User Approves)
+### Phase 2 Plan (Remaining Slices)
 
-The roadmap below structures post-MVP development into 7 distinct, vertical, independently verifiable slices:
-
-#### Slice 9a: Permission Policy File & Audit Logging (`P-4`, `P-7`, `SEC-5`)
-- **Scope**: Implement `.forge/policy.json` with pattern-based rules (e.g. `allow: ["bash(go test *)", "read(*)"]`, `deny: ["bash(rm *)"]`, `ask: ["edit(src/**)"]`). Enforce `deny` overrides `allow` (`P-5`). Audit log records decisions, never secrets/content, through redactor; persisted rules in user config only. Append all tool calls and approval decisions to `.forge/audit.jsonl` with secret redaction (`SEC-5`).
-- **Exit Check**: A test workspace with a policy allowing `go test` runs `go test` without prompting in `ask` mode, while a disallowed command prompts; all operations are recorded in `audit.jsonl`, verified under `-race`.
+The roadmap below structures remaining post-MVP development into 6 distinct, vertical slices:
 
 #### Slice 9b: Context Compaction & Token Budgets (`A-6`, `A-7`)
 - **Scope**: Hard token and cost budgets (`--max-cost`, `FORGE_MAX_COST`). Context compaction strategy (truncate old tool outputs, generate high-level conversational summary when approaching window limit).
@@ -243,6 +259,7 @@ Newest first. Format: `YYYY-MM-DD · Slice N · what was done · evidence (commi
 
 | Date       | Slice | What                                                                                                                      | Evidence                                              |
 | ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| 2026-11-13 | 9a    | Layered security policies, audit logging and secret handling: user (~/.forge/policy.json) and project (.forge/policy.json) policies (P-4), untrusted repo defense (ignore project allow rules), hard safety floor, shell command segment splitting/opacity/hazard analysis, path matching, credential file prompt in all modes and grep/glob skip (SEC-5, P-6), high-confidence regex redactor, 5 approval keys (y, a, A, n, f with 500-char redacted feedback) (P-3), CLI policy commands, tamper-evident SHA-256 hash-chained JSONL audit log with verify/rotation/fail-closed (P-7), docs (policy.md, audit.md, VERIFY.md) | `cmd/forge/policy_audit_exit_test.go:TestSlice9a_AutomatedExitCheck` (1.735s), `internal/policy/bash_test.go`, `internal/redact/redact_test.go`, `internal/audit/logger_test.go`, `internal/tui/approval_teatest_test.go`; all pass under `-race` |
 | 2026-11-13 | Git hygiene | Committed Slices 7–9 in logical groups (deps/toolchain, checkpoints core, credentials core, session core, engine/CLI/TUI integration, docs) with clean race test verification and push | Commits ac1e4b5, 1648572, 87db922, 559bd77, ef6a0b9, fa27955; `go test -race -count=1 ./...` passes 100% |
 | 2026-11-13 | 9     | SQLite session persistence and resume: pure Go SQLite (`modernc.org/sqlite v1.34.5`), WAL mode, mode 0600, forward migrations, secret redaction, 64KB tool output cap, crash safety, CLI `--resume [id]`, `forge run --resume <id>`, TUI `/resume` & `/sessions`, recent session fuzzy picker, canonical workspace binding validation, safe mode reset (`ask`), pre-resume undo continuity, and CLI management (`forge sessions list/show/delete/prune`) | `cmd/forge/session_exit_test.go:TestSlice9_SessionPersistenceAndResumeExitCheck`, `cmd/forge/session_cmd_test.go:TestSessionsCmd_ListShowDeletePrune`, `internal/session/store_test.go`, benchmark 5.48ms; all pass under `-race` |
 | 2026-11-13 | 8     | Onboarding, credentials, providers and models: OS keychain integration (`zalando/go-keyring`), fallback file 0600 (Linux-only with consent), `forge auth login/logout/status`, removed `--api-key` and reject secret flags with exit code 2, provider profiles, loopback probing for Ollama & LM Studio, "Loading model..." spinner, TUI onboarding wizard, `/model`, `/provider`, `/auth`, context-window validation, docs (`providers.md`, `local-models.md`) | `cmd/forge/auth_exit_test.go:TestSlice8_AuthAndHeadlessExitCheck`, `internal/tui/auth_teatest_test.go:TestSlice8_RealAuthTeatestExitCheck`, `internal/credentials/credentials_test.go`, `internal/llm/openai/local_contract_test.go`; all pass under `-race` |
@@ -287,6 +304,10 @@ Record anything that deviates from, resolves, or adds to `SPEC.md`. Newest first
 
 | Date       | Decision                                                                 | Reason                                                                             | Spec impact        |
 | ---------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- | ------------------ |
+| 2026-11-13 | Untrusted repository defense: project policy allow rules strictly ignored | Prevents malicious cloned repositories from obtaining automatic pre-approved execution | `internal/policy`, SPEC §3.3 |
+| 2026-11-13 | Command segment splitting and argument hazard safety floor                | Splitting on unquoted delimiters prevents chained bypasses; hazards (`go test -exec`) forced to prompt | `internal/policy`, SPEC §3.3 |
+| 2026-11-13 | Tamper-evident cryptographic per-session SHA-256 hash chains for audit log | Ensures modification, deletion, or reordering of audit records is detected instantly by verify | `internal/audit`, SPEC §3.3 |
+| 2026-11-13 | Approval key `'f'` captures feedback for the model                       | Rejection feedback (capped at 500 chars, redacted) guides the model to alternate solutions | `internal/tui`, `internal/agent`, SPEC §3.3 |
 | 2026-11-13 | Slices 7–9 committed late in deferred batch out of historical order      | Slices 7, 8, and 9 were developed and verified locally prior to committing; grouped logically into isolated backend modules, toolchain, and unified integration | Git hygiene        |
 | 2026-11-13 | Pure Go SQLite (`modernc.org/sqlite v1.34.5`) for session persistence    | Zero CGO requirement, static binary portability, WAL mode concurrency safety       | `internal/session`, SPEC §6.6 |
 | 2026-11-13 | Reject `--*key*` CLI flags with exit code 2 and hint to use `forge auth` | Absolute protection against secret leakage in process process listings / history  | `cmd/forge/main.go`, SPEC §3.5 |
@@ -329,6 +350,6 @@ _Convert a `_pending_` row to a dated row when decided. If a decision changes a 
 
 ## 6. Next 3 actions
 
-1. Awaiting human live verification: CI status confirmation on GitHub Actions (Linux/macOS/Windows), fresh machine check, demo recording, and human testing of `/undo` (Slice 7) and `forge auth` (Slice 8).
+1. Awaiting human live verification: CI status confirmation on GitHub Actions (Linux/macOS/Windows), fresh machine check, demo recording, and human testing of Slices 6, 7, 8, 9, and 9a in live TUI.
 2. Awaiting human resolution of ISSUE-4 (license undecided; keep name "forge") before tagging v0.1.0.
-3. Next implementation after human verification & approval: Slice 9a (Permission policy file & JSONL audit logging, `P-4`, `P-7`, `SEC-5`).
+3. Next planned implementation after human verification & approval: Slice 9b (Context Compaction & Token Budgets, `A-6`, `A-7`).

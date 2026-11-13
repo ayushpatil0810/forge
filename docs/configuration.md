@@ -38,6 +38,13 @@ Every configuration option supported by Forge:
 | `sessions.enabled` | `boolean` | `true` | `FORGE_SESSIONS_ENABLED` | `--no-session` | Controls whether sessions are persisted to SQLite database. |
 | `sessions.retention_days` | `integer` | `30` | `FORGE_SESSIONS_RETENTION_DAYS` | - | Default retention period in days before sessions are pruned. |
 | `sessions.database_path` | `string` | `"~/.forge/sessions.db"` | `FORGE_SESSIONS_DATABASE_PATH` | - | File path to the SQLite sessions database (mode 0600). |
+| `audit` | `object` | `{}` | - | - | Audit log configuration (user config only). |
+| `audit.enabled` | `boolean` | `true` | `FORGE_AUDIT_ENABLED` | - | Enables tamper-evident JSONL audit logging. |
+| `audit.path` | `string` | `"~/.forge/audit/<hash>.jsonl"` | `FORGE_AUDIT_PATH` | - | Path override for workspace audit log file. |
+| `audit.max_mb` | `integer` | `50` | `FORGE_AUDIT_MAX_MB` | - | Maximum audit file size in megabytes before rotation. |
+| `audit.required` | `boolean` | `false` | `FORGE_AUDIT_REQUIRED` | - | If true, fails closed (denies actions) when audit logging fails. |
+| `redaction` | `object` | `{}` | - | - | Sensitive credentials redaction settings (user config only). |
+| `redaction.tool_output` | `boolean` | `true` | `FORGE_REDACTION_TOOL_OUTPUT` | - | Automatically masks secrets and API keys in tool outputs. |
 | `providers` | `array` | `[]` | - | - | Array of named provider profiles with custom base URLs and default models. |
 | `ignored_project_keys` | `object` | `{}` | - | - | Map of untrusted project configuration keys ignored due to security policy. |
 
