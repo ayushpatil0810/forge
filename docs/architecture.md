@@ -93,7 +93,7 @@ graph TD
   - Native shell detection (`pwsh` -> `powershell.exe` -> `cmd.exe` on Windows; `$SHELL` -> `/bin/sh` on Unix).
   - Child process environment sanitization: strips `*_API_KEY`, `*_TOKEN`, `*_SECRET`; injects `CI=1`, `NO_COLOR=1`.
   - Standard input closed (`bytes.NewReader(nil)`) to prevent indefinite terminal hangs.
-  - Process tree termination via Windows Job Objects (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) and POSIX process groups (`Setpgid` + `SIGKILL`).
+  - Process tree termination via Windows Job Objects and POSIX process groups. On Windows the shell is created suspended and resumed only after `AssignProcessToJobObject`, because Go's `SysProcAttr` cannot create the process inside the job directly. If that assignment fails, the process is killed and the command returns an error. Closing the job handle kills the tree (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`). This is not a sandbox.
 
 ### 3.4 Permissions & Safety (`internal/permission`)
 - **Policy Modes**:

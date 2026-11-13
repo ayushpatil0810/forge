@@ -77,7 +77,7 @@ func (w WriteFile) NeedsApproval(input json.RawMessage) ApprovalRequest {
 	return ApprovalRequest{
 		Description: fmt.Sprintf("Write %s", args.Path),
 		Diff:        diff,
-		IsProtected: protectedPath(w.Root, args.Path, targetPath),
+		IsProtected: protectedPath(w.Root, args.Path, targetPath) || hasExtraLinks(w.Root, args.Path),
 	}
 }
 

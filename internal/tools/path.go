@@ -431,6 +431,22 @@ func entryProtected(root, rel, full string) bool {
 	return identityProtected(root, resolvedPath{Path: resolved, Traversed: traversed})
 }
 
+// hasExtraLinks reports whether the resolved file is a regular file with more
+// than one directory entry. read_file, write_file, and edit_file treat that as
+// protected even when the other name is outside the workspace (F-002).
+func hasExtraLinks(root, requested string) bool {
+	r, err := resolvePath(root, requested)
+	if err != nil || r.Path == "" {
+		return false
+	}
+	info, err := os.Lstat(r.Path)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	_, nlink, err := statIdentity(r.Path)
+	return err == nil && nlink > 1
+}
+
 func identityProtected(root string, r resolvedPath) bool {
 	if r.Path == "" {
 		return false

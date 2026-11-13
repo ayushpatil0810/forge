@@ -2,6 +2,15 @@ package tools
 
 // DefaultTools returns a registry with standard workspace tools (read-only, mutating, and shell).
 func DefaultTools(workspaceRoot string, shells ...ShellConfig) *Registry {
+	return defaultTools(workspaceRoot, nil, shells...)
+}
+
+// DefaultToolsWithEnvAllow is DefaultTools plus the user-config bash.env_allow list.
+func DefaultToolsWithEnvAllow(workspaceRoot string, envAllow []string, shells ...ShellConfig) *Registry {
+	return defaultTools(workspaceRoot, envAllow, shells...)
+}
+
+func defaultTools(workspaceRoot string, envAllow []string, shells ...ShellConfig) *Registry {
 	tracker := NewReadTracker()
 	var shell ShellConfig
 	if len(shells) > 0 {
@@ -17,7 +26,7 @@ func DefaultTools(workspaceRoot string, shells ...ShellConfig) *Registry {
 		ListDir{Root: workspaceRoot},
 		Glob{Root: workspaceRoot},
 		Grep{Root: workspaceRoot},
-		Bash{Root: workspaceRoot, Shell: shell},
+		Bash{Root: workspaceRoot, Shell: shell, EnvAllow: append([]string(nil), envAllow...)},
 	)
 }
 

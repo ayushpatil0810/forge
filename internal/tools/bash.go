@@ -44,8 +44,9 @@ func TruncateHeadTail(s string, maxBytes, headBytes, tailBytes int) string {
 }
 
 type Bash struct {
-	Root  string
-	Shell ShellConfig
+	Root     string
+	Shell    ShellConfig
+	EnvAllow []string
 }
 
 const bashSchema = `{
@@ -125,7 +126,11 @@ func (b Bash) NeedsApproval(input json.RawMessage) ApprovalRequest {
 	}
 }
 
-func sanitizeEnvironment(environ []string) []string {
+func sanitizeEnvironment(environ []string, allow []string) []string {
+	allowed := make(map[string]struct{}, len(allow))
+	for _, name := range allow {
+		allowed[strings.ToUpper(name)] = struct{}{}
+	}
 	var clean []string
 	for _, kv := range environ {
 		idx := strings.IndexByte(kv, '=')
@@ -133,14 +138,11 @@ func sanitizeEnvironment(environ []string) []string {
 			continue
 		}
 		key := kv[:idx]
-		kUpper := strings.ToUpper(key)
-		if strings.HasSuffix(kUpper, "_API_KEY") ||
-			strings.HasSuffix(kUpper, "_TOKEN") ||
-			strings.HasSuffix(kUpper, "_SECRET") ||
-			kUpper == "ANTHROPIC_API_KEY" ||
-			kUpper == "OPENAI_API_KEY" ||
-			kUpper == "GEMINI_API_KEY" ||
-			kUpper == "GOOGLE_API_KEY" {
+		if _, ok := allowed[strings.ToUpper(key)]; ok {
+			clean = append(clean, kv)
+			continue
+		}
+		if sensitiveEnv(key) {
 			continue
 		}
 		clean = append(clean, kv)
@@ -149,26 +151,101 @@ func sanitizeEnvironment(environ []string) []string {
 	return clean
 }
 
-type streamingBuffer struct {
-	mu     sync.Mutex
-	buf    bytes.Buffer
-	stream StreamFunc
+func sensitiveEnv(key string) bool {
+	kUpper := strings.ToUpper(key)
+	suffixes := []string{
+		"_API_KEY", "_TOKEN", "_SECRET", "_PASSWORD", "_PASSWD", "_PWD",
+		"_CREDENTIALS", "_PRIVATE_KEY", "_ACCESS_KEY", "_SECRET_KEY",
+	}
+	for _, suf := range suffixes {
+		if strings.HasSuffix(kUpper, suf) {
+			return true
+		}
+	}
+	prefixes := []string{"AWS_", "AZURE_", "GCP_", "GH_", "GITHUB_", "NPM_"}
+	for _, pre := range prefixes {
+		if strings.HasPrefix(kUpper, pre) {
+			return true
+		}
+	}
+	switch kUpper {
+	case "GOOGLE_APPLICATION_CREDENTIALS", "PGPASSWORD", "MYSQL_PWD", "SSH_AUTH_SOCK", "DATABASE_URL",
+		"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY":
+		return true
+	default:
+		return false
+	}
 }
 
-func (s *streamingBuffer) Write(p []byte) (n int, err error) {
+// streamingBuffer keeps a 10 KB head and a rolling 20 KB tail. Bytes that roll
+// off the tail are counted and not retained, so a command that prints tens of
+// megabytes cannot grow this buffer.
+type streamingBuffer struct {
+	mu       sync.Mutex
+	head     []byte
+	tail     []byte
+	dropped  int
+	stream   StreamFunc
+	streamed int
+}
+
+func (s *streamingBuffer) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	n, err = s.buf.Write(p)
-	if n > 0 && s.stream != nil {
-		s.stream(string(p[:n]))
+	n := len(p)
+	if n == 0 {
+		return 0, nil
 	}
-	return n, err
+	if s.stream != nil && s.streamed < MaxBashOutputBytes {
+		remain := MaxBashOutputBytes - s.streamed
+		chunk := p
+		if len(chunk) > remain {
+			chunk = chunk[:remain]
+		}
+		s.stream(string(chunk))
+		s.streamed += len(chunk)
+	}
+	if len(s.head) < HeadBashBytes {
+		take := HeadBashBytes - len(s.head)
+		if take > len(p) {
+			take = len(p)
+		}
+		s.head = append(s.head, p[:take]...)
+		p = p[take:]
+	}
+	if len(p) == 0 {
+		return n, nil
+	}
+	s.tail = append(s.tail, p...)
+	if len(s.tail) > TailBashBytes {
+		overflow := len(s.tail) - TailBashBytes
+		s.dropped += overflow
+		next := make([]byte, TailBashBytes)
+		copy(next, s.tail[overflow:])
+		s.tail = next
+	}
+	return n, nil
 }
 
 func (s *streamingBuffer) String() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.buf.String()
+	if s.dropped == 0 {
+		return string(s.head) + string(s.tail)
+	}
+	return fmt.Sprintf("%s\n... [dropped %d bytes] ...\n%s", s.head, s.dropped, s.tail)
+}
+
+func (s *streamingBuffer) Dropped() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dropped
+}
+
+func (s *streamingBuffer) Retained() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.head) + len(s.tail)
 }
 
 func (b Bash) Run(ctx context.Context, input json.RawMessage) (Result, error) {
@@ -194,14 +271,17 @@ func (b Bash) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 	cmdArgs := sh.BuildArgs(args.Command)
 	cmd := exec.Command(sh.Path, cmdArgs...)
 	cmd.Dir = absRoot
-	cmd.Env = sanitizeEnvironment(os.Environ())
+	cmd.Env = sanitizeEnvironment(os.Environ(), b.EnvAllow)
 	cmd.Stdin = bytes.NewReader(nil)
 
-	// Setup process group / job object for clean process-tree termination
+	// Setup process group / job object for clean process-tree termination.
+	// On Windows the process is created suspended and only resumed after it is
+	// inside the job. Assignment failure aborts the command.
 	pg, err := setupProcessGroup(cmd)
 	if err != nil {
-		_ = err // Best effort: continue if process group creation is restricted
+		return Result{Output: fmt.Sprintf("failed to create process group: %s", err), IsError: true}, nil
 	}
+	defer pg.Close()
 
 	streamFn := StreamFromContext(ctx)
 	outBuf := &streamingBuffer{stream: streamFn}
@@ -212,8 +292,9 @@ func (b Bash) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 		return Result{Output: fmt.Sprintf("failed to start shell process (%s): %s", sh.Path, err), IsError: true}, nil
 	}
 
-	if pg != nil {
-		_ = pg.Attach(cmd)
+	if err := pg.Attach(cmd); err != nil {
+		pg.Kill(cmd)
+		return Result{Output: fmt.Sprintf("failed to contain shell process: %s", err), IsError: true}, nil
 	}
 
 	timeoutDur := time.Duration(args.TimeoutSeconds) * time.Second
@@ -247,7 +328,10 @@ func (b Bash) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 
 	rawOutput := outBuf.String()
 	cleanOutput := StripANSI(rawOutput)
-	finalOutput := TruncateHeadTail(cleanOutput, MaxBashOutputBytes, HeadBashBytes, TailBashBytes)
+	finalOutput := cleanOutput
+	if outBuf.Dropped() == 0 {
+		finalOutput = TruncateHeadTail(cleanOutput, MaxBashOutputBytes, HeadBashBytes, TailBashBytes)
+	}
 
 	if timedOut {
 		return Result{

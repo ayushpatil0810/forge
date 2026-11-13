@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/ayushpatil0810/forge/internal/agent"
@@ -126,6 +127,9 @@ type Manager struct {
 
 func NewManager(kr Keyring) *Manager {
 	if kr == nil {
+		if testing.Testing() && !testKeyringReady() {
+			panic("credentials: refusing to open the OS keychain under go test; call credentials.ArmForTest in TestMain")
+		}
 		kr = getDefaultKeyring()
 	}
 	fbPath, _ := getFallbackPath()

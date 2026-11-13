@@ -21,6 +21,7 @@ import (
 	"github.com/ayushpatil0810/forge/internal/llm"
 	"github.com/ayushpatil0810/forge/internal/permission"
 	"github.com/ayushpatil0810/forge/internal/session"
+	"github.com/ayushpatil0810/forge/internal/tools"
 )
 
 var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
@@ -165,6 +166,7 @@ type Model struct {
 	store           *session.Store
 	noSession       bool
 
+	auditWarning          string
 	pendingApproval       *agent.ApprovalRequestedPayload
 	showApprovalDiff      bool
 	previewingAlwaysAllow string
@@ -533,8 +535,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.updateViewportContent()
 				return m, nil
 			case "tab":
-				m.cyclePermissionMode()
-				m.updateViewportContent()
+				// Tab switches permission mode from the prompt. It must not
+				// do that while an approval card is open (F-023).
 				return m, nil
 			case "ctrl+c", "esc":
 				_ = m.session.Respond(m.pendingApproval.ID, agent.DecisionDeny)
@@ -986,10 +988,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.updateViewportContent()
 			}
 
+		case agent.EventNotice:
+			if m.auditWarning == "" && ev.Notice != "" {
+				m.auditWarning = ev.Notice
+				m.updateViewportContent()
+			}
+
 		case agent.EventToolOutputDelta:
 			if ev.ToolOut != nil {
 				if tc, ok := m.toolCards[ev.ToolOut.ID]; ok {
 					tc.Output += ev.ToolOut.Chunk
+					if len(tc.Output) > tools.MaxBashOutputBytes {
+						tc.Output = tools.TruncateHeadTail(tc.Output, tools.MaxBashOutputBytes, tools.HeadBashBytes, tools.TailBashBytes)
+					}
 					m.updateViewportContent()
 				}
 			}
@@ -1341,6 +1352,9 @@ func (m Model) View() string {
 	// transcript) and in the footer until the user sends a message.
 	if len(m.securityNotices) > 0 && len(m.items) == 0 {
 		help = m.styles.ToolCardError.Render("SEC-6: "+m.securityNotices[0]) + "\n" + help
+	}
+	if m.auditWarning != "" {
+		help = m.styles.ToolCardError.Render(m.auditWarning) + "\n" + help
 	}
 
 	return fmt.Sprintf(

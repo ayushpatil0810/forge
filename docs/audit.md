@@ -1,6 +1,6 @@
 # Forge Audit Logging & Tamper Evidence Guide
 
-Forge provides an immutable, tamper-evident audit log system (`SPEC §3.3 P-7`) that records every tool request, human approval decision, and execution result.
+Forge keeps an audit log (`SPEC §3.3 P-7`) of every tool request, human approval decision, and execution result. The log is tamper-evident against edits, deletions and truncation, but not against an attacker who can rewrite both the log and its state file.
 
 ---
 
@@ -82,7 +82,7 @@ Running `forge audit verify` audits the log against three invariant checks:
 
 > [!NOTE]
 > **Tamper-Evident vs Tamper-Proof**:
-> Forge's audit log is **tamper-evident**, not tamper-proof.
+> The log is tamper-evident against edits, deletions and truncation, but not against an attacker who can rewrite both the log and its state file. Rotation keeps the hash chain: the first record of a new file carries the last hash of the previous file.
 > Any process with file-write permissions on your disk could rewrite the entire file from scratch.
 > However, any modification, deletion, or reordering of historical records without recalculating every downstream record hash will be immediately detected and reported.
 

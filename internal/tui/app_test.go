@@ -295,6 +295,32 @@ func TestTUINarrowAndShortLayout(t *testing.T) {
 	}
 }
 
+func TestTabDuringApprovalDoesNotChangeMode(t *testing.T) {
+	p := mock.New()
+	s := agent.NewLocal(agent.Config{Provider: p})
+	defer s.Close()
+	before := s.Mode()
+
+	m := tui.New(s, tui.DarkTheme())
+	newM, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = newM.(tui.Model)
+	newM, _ = m.Update(agent.Event{
+		Type: agent.EventApprovalRequested,
+		Approval: &agent.ApprovalRequestedPayload{
+			ID: "call", Tool: "bash", Command: "echo hi",
+		},
+	})
+	m = newM.(tui.Model)
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = newM.(tui.Model)
+	if s.Mode() != before {
+		t.Fatalf("tab changed permission mode from %s to %s while an approval card was open", before, s.Mode())
+	}
+	if !strings.Contains(stripANSI(m.View()), "Approval Required") {
+		t.Fatal("approval card closed when tab was pressed")
+	}
+}
+
 func TestTUIApprovalSessionAllow(t *testing.T) {
 	p := mock.New()
 	s := agent.NewLocal(agent.Config{Provider: p})

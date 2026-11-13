@@ -13,6 +13,7 @@ const (
 	EventUsageUpdated      EventType = "UsageUpdated"
 	EventRetryScheduled    EventType = "RetryScheduled"
 	EventError             EventType = "Error"
+	EventNotice            EventType = "Notice"
 	EventDone              EventType = "Done"
 )
 
@@ -115,6 +116,7 @@ type Event struct {
 	Usage     *UsageUpdatedPayload      `json:"usage,omitempty"`
 	Retry     *RetryScheduledPayload    `json:"retry,omitempty"`
 	Err       *ErrorPayload             `json:"err,omitempty"`
+	Notice    string                    `json:"notice,omitempty"`
 	Done      *DonePayload              `json:"done,omitempty"`
 }
 

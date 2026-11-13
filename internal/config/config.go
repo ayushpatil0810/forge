@@ -39,6 +39,11 @@ type RedactionConfig struct {
 	ToolOutput *bool `json:"tool_output,omitempty"`
 }
 
+// BashConfig holds user-only shell settings. Project config cannot set these.
+type BashConfig struct {
+	EnvAllow []string `json:"env_allow,omitempty"`
+}
+
 // Config holds agent configuration parameters across layers.
 type Config struct {
 	Provider           string            `json:"provider,omitempty"`
@@ -54,6 +59,7 @@ type Config struct {
 	Sessions           *SessionsConfig   `json:"sessions,omitempty"`
 	Audit              *AuditConfig      `json:"audit,omitempty"`
 	Redaction          *RedactionConfig  `json:"redaction,omitempty"`
+	Bash               *BashConfig       `json:"bash,omitempty"`
 	Providers          []ProviderProfile `json:"providers,omitempty"`
 	IgnoredProjectKeys map[string]string `json:"ignored_project_keys,omitempty"`
 	Warnings           []string          `json:"-"`
@@ -330,6 +336,10 @@ func mergeProjectFile(dst *Config, path string) error {
 			reason := "arbitrary code execution risk; shell can only be configured in user config or CLI flags"
 			dst.IgnoredProjectKeys["shell"] = reason
 			dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Forbidden key %q in project config %q ignored (%s)", k, path, reason))
+		case "bash", "bash.env_allow":
+			reason := "bash.env_allow can only be configured in user config"
+			dst.IgnoredProjectKeys[k] = reason
+			dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Forbidden key %q in project config %q ignored (%s)", k, path, reason))
 		case "base_url":
 			reason := "credential exfiltration and SSRF risk; base_url can only be configured in user config or CLI flags"
 			dst.IgnoredProjectKeys["base_url"] = reason
@@ -440,6 +450,13 @@ func merge(dst *Config, src Config) {
 		c := *src.Redaction
 		c.ToolOutput = cloneBool(src.Redaction.ToolOutput)
 		dst.Redaction = &c
+	}
+	if src.Bash != nil {
+		c := *src.Bash
+		if src.Bash.EnvAllow != nil {
+			c.EnvAllow = append([]string(nil), src.Bash.EnvAllow...)
+		}
+		dst.Bash = &c
 	}
 }
 

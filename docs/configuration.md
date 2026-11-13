@@ -34,12 +34,13 @@ Every configuration option supported by Forge:
 | `theme` | `string` | `"dark"` | `FORGE_THEME` | `--theme` | TUI color theme: `dark`, `light`, `catppuccin-mocha`, `tokyo-night`, or `auto`. |
 | `system_prompt` | `string` | `""` | `FORGE_SYSTEM_PROMPT` | `--system-prompt` | Additional instructions appended after the built security prompt. They never replace the base prompt (SEC-1, shell guidance, and the project-guidance block). |
 | `shell` | `string` | *(auto-detected)* | `FORGE_SHELL` | `--shell` | Host shell executable (`pwsh`, `powershell.exe`, `cmd.exe`, `bash`, `zsh`, `sh`). |
+| `bash.env_allow` | `string[]` | *(none)* | - | - | User-config-only names that bash may keep even when they look like credentials. Project config cannot set this. |
 | `sessions` | `object` | `{}` | - | - | Session persistence and SQLite database settings. |
 | `sessions.enabled` | `boolean` | `true` | `FORGE_SESSIONS_ENABLED` | `--no-session` | Controls whether sessions are persisted to SQLite database. |
 | `sessions.retention_days` | `integer` | `30` | `FORGE_SESSIONS_RETENTION_DAYS` | - | Default retention period in days before sessions are pruned. |
 | `sessions.database_path` | `string` | `"~/.forge/sessions.db"` | `FORGE_SESSIONS_DATABASE_PATH` | - | File path to the SQLite sessions database (mode 0600). |
 | `audit` | `object` | `{}` | - | - | Audit log configuration (user config only). |
-| `audit.enabled` | `boolean` | `true` | `FORGE_AUDIT_ENABLED` | - | Enables tamper-evident JSONL audit logging. |
+| `audit.enabled` | `boolean` | `true` | `FORGE_AUDIT_ENABLED` | - | Enables the JSONL audit log. It is tamper-evident against edits, deletions and truncation, but not against an attacker who can rewrite both the log and its state file. |
 | `audit.path` | `string` | `"~/.forge/audit/<hash>.jsonl"` | `FORGE_AUDIT_PATH` | - | Path override for workspace audit log file. |
 | `audit.max_mb` | `integer` | `50` | `FORGE_AUDIT_MAX_MB` | - | Maximum audit file size in megabytes before rotation. |
 | `audit.required` | `boolean` | `false` | `FORGE_AUDIT_REQUIRED` | - | If true, fails closed (denies actions) when audit logging fails. |
@@ -122,6 +123,7 @@ The built prompt (SEC-1 untrusted-data rule, operating environment, and tool gui
 ### Forbidden Keys (Ignored with Visible Warning)
 The following keys are **strictly forbidden** in `.forge/config.json` and will be discarded:
 - `shell`: **Ignored** (arbitrary code execution vector; can only be set via user config or `--shell`).
+- `bash` and `bash.env_allow`: **Ignored** (the credential allow-list is user config only).
 - `base_url`: **Ignored** (credential exfiltration and SSRF vector; can only be set via user config or `--base-url`).
 - `permission_mode` (any value, including `ask`, `accept-edits`, `plan`, and `yolo`): **Ignored** (a cloned repository must not grant a permission mode).
 - `system_prompt`: **Ignored** (a cloned repository must not set the system prompt).

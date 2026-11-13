@@ -112,14 +112,13 @@ A command is classified as **opaque** and falls to the safety floor if it contai
 - Dynamic execution primitives: `eval`, `Invoke-Expression`, `iex`, or PowerShell `-EncodedCommand`
 
 ### Rule Matching
-- **Allow Rules**: *Every* segment must match the allowed pattern token by token. If a command runs `go test ./... ; rm -rf x`, the second segment fails the allow rule and execution prompts.
+- **Allow rules are a convenience built on a safe-flag table, not a sandbox.** A wildcard such as `bash(go test:*)` auto-allows a command only when the command is not opaque and every argument is either a plain path (no leading dash) or a flag from a small built-in table. The table covers `go test`, `go build`, and `go vet` (`-v`, `-race`, `-count`, `-run`, `-cover`, `-short`, `-timeout`, `-tags`) and the read-only git subcommands `status`, `diff`, `log`, `show`, and `branch` with a few read-only flags. An unknown flag does not match. A command with no table matches only an exact saved command string. Quote characters are stripped before flags are classified, so `go test "-exec"` is the same flag as `go test -exec`.
 - **Deny Rules**: If *any* segment matches the deny pattern, or if the raw command string contains the denied sequence, the command is denied immediately.
-- **Argument Hazards**: Commands containing execution hooks such as `go test -exec <prog>`, `go test -toolexec`, `git -c <config>`, or `git --upload-pack` are never auto-allowed even if `bash(go test:*)` is permitted.
+- **Safety floor**: These are never auto-allowed, including in yolo, and they are denied in headless mode: `find` with `-exec`, `-execdir`, `-ok`, or `-delete`; `xargs`; `env` when it runs a command; `sh`, `bash`, `zsh`, `cmd`, `powershell`, or `pwsh` with `-c`, `/c`, `-Command`, `-EncodedCommand`, `-enc`, `-ec`, or `-e`; `eval`; `iex` / `Invoke-Expression`; `git` with `-c`, `--config-env`, `--upload-pack`, `--exec-path`, or `alias.*`; `go` with `-exec`, `-toolexec`, or `-overlay`. Opaque commands (substitutions, redirections, `$VAR` / `%VAR%` expansion, concatenated quotes) are on this floor too.
 
 > [!NOTE]
-> **Convenience vs Sandbox Disclaimer**:
-> Forge's shell analysis is a strong heuristic defense against accidental misfires and common injection bypasses.
-> It is **not** an operating-system level sandbox. For untrusted code execution, always run Forge in an isolated container or VM.
+> **Not a sandbox**:
+> Allow rules only skip a prompt for commands the safe-flag table understands. They do not contain a shell. Run Forge in a container or VM when the workspace is untrusted.
 
 ---
 

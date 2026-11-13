@@ -154,16 +154,33 @@ func TestBashTool_SanitizedEnvironment(t *testing.T) {
 		"CUSTOM_API_KEY=secret_key",
 		"GITHUB_TOKEN=ghp_token",
 		"AWS_SECRET=secret_aws",
+		"AWS_SECRET_ACCESS_KEY=aws-secret",
+		"AWS_ACCESS_KEY_ID=aws-id",
+		"PGPASSWORD=pg-secret",
+		"MYSQL_PWD=mysql-secret",
+		"DATABASE_URL=postgres://secret",
+		"SSH_AUTH_SOCK=/tmp/ssh",
+		"GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp.json",
+		"AZURE_CLIENT_SECRET=azure-secret",
+		"GCP_KEY=gcp-secret",
+		"GH_TOKEN=gh-secret",
+		"NPM_TOKEN=npm-secret",
+		"HOME=/home/alice",
+		"GOPATH=/go",
+		"GOFLAGS=-mod=mod",
+		"SAFE_PUBLIC=visible",
 		"SAFE_USER=alice",
 		"FOO_BAR=baz",
 	}
 
-	sanitized := sanitizeEnvironment(env)
+	sanitized := sanitizeEnvironment(env, []string{"AWS_SECRET_ACCESS_KEY"})
 	joined := strings.Join(sanitized, "\n")
 
 	for _, bad := range []string{
 		"sk-ant-123", "sk-proj-456", "gemini-789", "google-abc",
-		"secret_key", "ghp_token", "secret_aws",
+		"secret_key", "ghp_token", "secret_aws", "aws-id", "pg-secret",
+		"mysql-secret", "postgres://secret", "/tmp/ssh", "/tmp/gcp.json",
+		"azure-secret", "gcp-secret", "gh-secret", "npm-secret",
 	} {
 		if strings.Contains(joined, bad) {
 			t.Fatalf("sanitized env still contains secret %q: %s", bad, joined)
@@ -176,8 +193,13 @@ func TestBashTool_SanitizedEnvironment(t *testing.T) {
 	if !strings.Contains(joined, "NO_COLOR=1") {
 		t.Fatalf("expected NO_COLOR=1 in sanitized env")
 	}
-	if !strings.Contains(joined, "SAFE_USER=alice") {
-		t.Fatalf("expected SAFE_USER=alice in sanitized env")
+	for _, keep := range []string{
+		"SAFE_USER=alice", "PATH=/usr/bin", "HOME=/home/alice", "GOPATH=/go",
+		"GOFLAGS=-mod=mod", "SAFE_PUBLIC=visible", "AWS_SECRET_ACCESS_KEY=aws-secret",
+	} {
+		if !strings.Contains(joined, keep) {
+			t.Fatalf("expected %s to be kept, got:\n%s", keep, joined)
+		}
 	}
 }
 
@@ -265,64 +287,29 @@ func TestBashTool_ProcessTreeGrandchildKill(t *testing.T) {
 
 		input, _ := json.Marshal(map[string]any{
 			"command":         cmdStr,
-			"timeout_seconds": 10,
+			"timeout_seconds": 30,
 		})
 
 		ctx, cancel := context.WithCancel(context.Background())
-		done := make(chan struct{})
-
+		done := make(chan bashRun, 1)
 		go func() {
-			defer close(done)
-			var pid int
-			for i := 0; i < 50; i++ {
-				data, err := os.ReadFile(pidFile)
-				if err == nil && len(data) > 0 {
-					pid, _ = strconv.Atoi(string(data))
-					if pid > 0 {
-						break
-					}
-				}
-				time.Sleep(50 * time.Millisecond)
-			}
-			if pid <= 0 {
-				cancel()
-				return
-			}
-
-			if !isProcessAlive(pid) {
-				t.Errorf("grandchild %d was expected to be alive before cancel", pid)
-			}
-
-			cancel()
+			res, err := tool.Run(ctx, input)
+			done <- bashRun{res, err}
 		}()
 
-		res, err := tool.Run(ctx, input)
-		<-done
-
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		pid := waitForGrandchildPID(t, pidFile, done)
+		if !isProcessAlive(pid) {
+			t.Fatalf("grandchild %d was expected to be alive before cancel", pid)
 		}
-		if !res.IsError || !strings.Contains(res.Output, "cancelled by user") {
-			t.Fatalf("expected cancelled by user, got: %+v", res)
+		cancel()
+		res := awaitBash(t, done)
+		if res.err != nil {
+			t.Fatalf("unexpected error: %v", res.err)
 		}
-
-		data, err := os.ReadFile(pidFile)
-		if err != nil {
-			t.Fatalf("failed to read pidFile: %v", err)
+		if !res.res.IsError || !strings.Contains(res.res.Output, "cancelled by user") {
+			t.Fatalf("expected cancelled by user, got: %+v", res.res)
 		}
-		pid, _ := strconv.Atoi(string(data))
-
-		dead := false
-		for i := 0; i < 20; i++ {
-			if !isProcessAlive(pid) {
-				dead = true
-				break
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
-		if !dead {
-			t.Fatalf("grandchild process %d is still alive after cancellation", pid)
-		}
+		waitUntilDead(t, pid)
 	}
 
 	// Case 2: Process tree dies on timeout
@@ -337,33 +324,76 @@ func TestBashTool_ProcessTreeGrandchildKill(t *testing.T) {
 
 		input, _ := json.Marshal(map[string]any{
 			"command":         cmdStr,
-			"timeout_seconds": 1,
+			"timeout_seconds": 15,
 		})
 
-		res, err := tool.Run(context.Background(), input)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		done := make(chan bashRun, 1)
+		go func() {
+			res, err := tool.Run(context.Background(), input)
+			done <- bashRun{res, err}
+		}()
+		pid := waitForGrandchildPID(t, pidFile, done)
+		res := awaitBash(t, done)
+		if res.err != nil {
+			t.Fatalf("unexpected error: %v", res.err)
 		}
-		if !res.IsError || !strings.Contains(res.Output, "timed out after 1 seconds") {
-			t.Fatalf("expected timeout error, got: %+v", res)
+		if !res.res.IsError || !strings.Contains(res.res.Output, "timed out after 15 seconds") {
+			t.Fatalf("expected timeout error, got: %+v", res.res)
 		}
-
-		data, err := os.ReadFile(pidFile)
-		if err != nil {
-			t.Fatalf("failed to read pidFile: %v", err)
-		}
-		pid, _ := strconv.Atoi(string(data))
-
-		dead := false
-		for i := 0; i < 20; i++ {
-			if !isProcessAlive(pid) {
-				dead = true
-				break
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
-		if !dead {
-			t.Fatalf("grandchild process %d is still alive after timeout", pid)
-		}
+		waitUntilDead(t, pid)
 	}
+}
+
+type bashRun struct {
+	res Result
+	err error
+}
+
+func waitForGrandchildPID(t *testing.T, pidFile string, done <-chan bashRun) int {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if data, err := os.ReadFile(pidFile); err == nil {
+			if pid, _ := strconv.Atoi(strings.TrimSpace(string(data))); pid > 0 {
+				return pid
+			}
+		}
+		select {
+		case res := <-done:
+			t.Fatalf("helper exited before pid file %s appeared: %v output=%q", pidFile, res.err, res.res.Output)
+		default:
+		}
+		if time.Now().After(deadline) {
+			select {
+			case res := <-done:
+				t.Fatalf("helper exited before pid file %s appeared: %v output=%q", pidFile, res.err, res.res.Output)
+			default:
+				t.Fatalf("pid file %s did not appear within 15s", pidFile)
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func awaitBash(t *testing.T, done <-chan bashRun) bashRun {
+	t.Helper()
+	select {
+	case res := <-done:
+		return res
+	case <-time.After(20 * time.Second):
+		t.Fatal("timed out waiting for the shell command to finish")
+		return bashRun{}
+	}
+}
+
+func waitUntilDead(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if !isProcessAlive(pid) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("grandchild process %d is still alive after kill", pid)
 }
