@@ -98,10 +98,10 @@ Priority: **P0** = MVP, **P1** = v1.0, **P2** = post-v1.
 | --- | ------------------------------------------------------------------------------------------------ | --- |
 | P-1 | Modes: `ask` (default), `accept-edits`, `plan` (read-only), `yolo` (no prompts, explicit opt-in) | P0  |
 | P-2 | Approval prompt shows the exact action (diff for edits, command for bash)                        | P0  |
-| P-3 | User choices: allow once, allow for session, always allow (persisted), deny, deny with feedback  | P1  |
+| P-3 | User choices: allow once (`[y]`), allow for session (`[a]`, never offered for dangerous commands), deny (`[n]`), diff preview (`[e]`), mode switch (`[Tab]`). In headless mode, unanswerable approvals are auto-denied (dangerous commands require `--yolo`; protected paths require manual approval; edits/writes require `--yes` or `--yolo`). | P1  |
 | P-4 | Policy file with allow/deny/ask rules using patterns, e.g. `bash(go test:*)`, `edit(src/**)`     | P1  |
 | P-5 | Deny rules always override allow rules                                                           | P1  |
-| P-6 | Protected paths (`.git/`, `.env`, credentials) require explicit approval                         | P1  |
+| P-6 | Protected paths (`.git/`, `.env*`, `.ssh/`, `.aws/`, `id_rsa*`, `*.pem`, `*.key`, `*.pfx`, `*.p12`, `credentials`) always prompt for approval in `ask`, `accept-edits`, and `yolo` modes; denied in `plan` mode. | P1  |
 | P-7 | Audit log of every tool call, decision, and result (JSONL)                                       | P1  |
 
 ### 3.4 Sessions, Checkpoints, and Memory
@@ -276,6 +276,17 @@ type Session interface {
     Respond(approvalID string, d Decision) error
     Cancel()
     Usage() Usage
+    Mode() permission.Mode
+    SetMode(mode permission.Mode)
+    Checkpointer() Checkpointer
+    Close() error
+}
+
+// Checkpointer abstracts atomic workspace snapshotting and rollback.
+type Checkpointer interface {
+    List(ctx context.Context) ([]CheckpointInfo, error)
+    Restore(ctx context.Context, id string) error
+    Undo(ctx context.Context) error
 }
 
 // Provider abstraction.
@@ -291,7 +302,6 @@ type Tool interface {
     Description() string
     Schema() json.RawMessage
     Run(ctx context.Context, input json.RawMessage) (Result, error)
-    NeedsApproval(input json.RawMessage) ApprovalRequest // zero value means none
 }
 ```
 
@@ -432,24 +442,19 @@ All events are plain, JSON-serializable structs (Wails generates TypeScript type
 
 ---
 
-## 11. Tech Stack
+## 11. Tech Stack (As-Built)
 
-| Concern           | Choice                                                                                  |
-| ----------------- | --------------------------------------------------------------------------------------- |
-| TUI               | Bubble Tea, Lip Gloss, Bubbles, Glamour, Chroma                                         |
-| CLI / config      | Cobra + koanf (or Viper)                                                                |
-| LLM               | Official Anthropic / OpenAI Go SDKs or raw HTTP + SSE                                   |
-| Persistence       | SQLite via `modernc.org/sqlite` (pure Go, no CGO)                                       |
-| Code intelligence | tree-sitter Go bindings                                                                 |
-| MCP               | Official Go SDK or `mark3labs/mcp-go`                                                   |
-| Diff              | `sergi/go-diff` / custom unified diff renderer                                          |
-| Keychain          | `zalando/go-keyring`                                                                    |
-| Desktop           | Wails (confirm v2 vs v3 status at start), React, TypeScript, Vite                       |
-| Desktop UI        | Tailwind, shadcn/ui, zustand, react-markdown, Shiki, Monaco / react-diff-view, xterm.js |
-| Release           | GoReleaser, GitHub Actions                                                              |
-| Demos             | VHS (Charm)                                                                             |
-
-> Verify current major versions of Bubble Tea, Lip Gloss, and Wails before pinning.
+| Concern           | Choice                                                                                  | Notes / Rationale |
+| ----------------- | --------------------------------------------------------------------------------------- | ----------------- |
+| TUI Engine        | Charm v1 (`bubbletea v1.3.4`, `lipgloss v1.0.0`, `bubbles v0.20.0`, `glamour v0.8.0`)   | Verified stable, production-tested ANSI rendering across Windows, Linux, macOS |
+| CLI / Config      | Cobra + standard library pure Go JSON config loader                                     | 5-tier layered config without heavy external dependencies (koanf/viper dropped) |
+| LLM Adapters      | Raw HTTP + SSE streaming (`internal/llm`)                                               | Full control over token deltas, retries, SSE chunking, and cost tracking |
+| Process Isolation | Windows Job Objects (`golang.org/x/sys/windows`) and POSIX process groups               | Guarantees clean process tree termination on interrupt or timeout |
+| Checkpoints / Undo| Native Git plumbing with isolated shadow Git repository in `os.UserCacheDir()`          | 100% isolation from user repo; ~298ms snapshot on 10k files; atomic rollback |
+| Unified Diff      | `github.com/pmezard/go-difflib`                                                         | Clean unified diff output for approval review cards |
+| Path Matching     | `bmatcuk/doublestar/v4`, `sabhiram/go-gitignore`                                        | Fast, standard globbing and ignore file evaluation |
+| Release Toolchain | GoReleaser v2, GitHub Actions CI                                                        | Multi-platform cross-compilation (6 targets: linux/darwin/windows amd64/arm64) |
+| Demo Capture      | Charm VHS                                                                               | Deterministic terminal demo GIF recording via `--demo` |
 
 ---
 
@@ -478,15 +483,13 @@ All events are plain, JSON-serializable structs (Wails generates TypeScript type
 
 ---
 
-## 14. Open Questions
+## 14. Open Questions & As-Built Decisions
 
-1. Final project name and domain.
-2. License (MIT / Apache-2.0 for open core vs. source-available).
-3. Wails v2 or v3 for the desktop app.
-4. Shell strategy on Windows (PowerShell, cmd, or WSL detection).
-5. Checkpoint mechanism details: shadow git ref vs. separate bare repo.
-6. Whether to ship the daemon (`forge serve`) in v1 or defer.
-7. First provider to implement (default: Anthropic).
+1. **Project Name**: Kept as "forge".
+2. **License**: Undecided (awaiting user decision; see Known Issues).
+3. **Shell Strategy on Windows**: As-built uses native shell detection (`pwsh` > `powershell.exe` > `cmd.exe`) with user-configurable overrides (`--shell` flag, config file).
+4. **Checkpoint Mechanism**: As-built uses an isolated shadow Git repository in `os.UserCacheDir()` with strict environment isolation, avoiding user commit log pollution.
+5. **Headless Execution**: Canonical form `forge run "prompt"` with `--output text|json|stream-json`, `--permission-mode`, `--max-turns`.
 
 ---
 
@@ -498,3 +501,15 @@ All events are plain, JSON-serializable structs (Wails generates TypeScript type
 - **MCP:** Model Context Protocol, a standard for exposing external tools and data to LLMs.
 - **Repo map:** a compact index of a codebase's symbols used to orient the model.
 - **Headless mode:** non-interactive execution for scripts and CI.
+
+---
+
+## 16. Revision Log
+
+| Revision | Date | Author | Description |
+| :--- | :--- | :--- | :--- |
+| **0.1** | 2026-11-10 | Lead Engineer | Initial design specification and contracts. |
+| **0.2** | 2026-11-11 | Lead Engineer | Added prompt injection defenses, exact string replacement (`edit_file`), and tool approval card designs. |
+| **0.3** | 2026-11-11 | Lead Engineer | Defined native shell strategy for Windows and POSIX process tree termination. |
+| **0.4** | 2026-11-12 | Lead Engineer | Hardened release engineering: GoReleaser 6-target distribution, layered config, themes, and WCAG contrast rules. |
+| **0.5** | 2026-11-12 | Lead Engineer | As-built updates: §6.3 real `Session` and `Checkpointer` interfaces, §3.3 P-3 approval choices and headless auto-deny, §3.3 P-6 protected paths, §11 tech stack dependencies, and shadow Git checkpoint architecture. |

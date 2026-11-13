@@ -1,8 +1,8 @@
-# Forge 🔨
+# Forge
 
 **Forge** is a fast, robust, terminal-first AI coding agent engineered in Go.
 
-It gives developers an autonomous programming partner directly in the terminal—capable of exploring codebases, editing files with diff previews, and executing test suites in autonomous fix loops.
+It gives developers an autonomous programming partner directly in the terminal—capable of exploring codebases, editing files with diff previews, executing test suites in autonomous fix loops, and providing atomic undo checkpoints.
 
 ```
    ___                            
@@ -17,13 +17,29 @@ It gives developers an autonomous programming partner directly in the terminal�
 
 ## Highlights
 
-- **Provider Agnostic**: Seamless first-class support for **Anthropic** (Claude 3.5 Sonnet), **OpenAI** (GPT-4o, o3-mini), **Google Gemini** (Gemini 2.5 Pro, Flash), and an offline deterministic **Mock Replayer**.
+- **Multi-Provider Architecture**: First-class support for **OpenAI** (verified live), **Anthropic** and **Google Gemini** (contract-tested, live verification pending), local models via **Ollama**, and an offline deterministic **Mock Replayer**.
+- **Shadow Git Checkpoints & Undo**: Automatic snapshot before mutating tool calls. Instant rollback via `/undo` or `forge undo` without touching user commit history.
 - **Autonomous Fix Loop**: Dispatches builds and test suites, isolates errors, inspects code, applies targeted edits, and re-verifies until tests pass.
-- **Safety First (`SEC-1`–`SEC-6`)**: Four permission policies (`ask`, `accept-edits`, `plan`, `yolo`), dangerous command interception, process-tree isolation, and zero project credentials.
+- **Safety First (`SEC-1`–`SEC-6`)**: Four permission policies (`ask`, `accept-edits`, `plan`, `yolo`), dangerous command interception, protected path enforcement (`.git/`, `.env*`, `.ssh/`), process-tree isolation, and zero project credentials.
 - **Interactive Terminal UI**: Bubble Tea TUI featuring live syntax rendering, colorized unified diff previews, real-time command streaming, and tool card toggling (`Ctrl+O`).
-- **Semantic Themes**: Built-in support for `dark`, `light`, `catppuccin-mocha`, `tokyo-night`, `auto` terminal background detection, and `monochrome` (`NO_COLOR`).
-- **Scriptable Headless Mode**: Run directly in CI/CD pipelines or shell scripts via `forge "prompt" --yes`.
+- **Semantic Themes**: Built-in WCAG 2.1 compliant themes (`dark`, `light`, `catppuccin-mocha`, `tokyo-night`), auto background detection, and monochrome fallback (`NO_COLOR`, `TERM=dumb`).
+- **Scriptable Headless Mode**: Canonical `forge run "prompt"` with structured output (`--output text|json|stream-json`), turn limits, and standardized exit codes.
 - **Zero Runtime Dependencies**: Single static Go binary (`CGO_ENABLED=0`), under 20MB, with sub-100ms startup times.
+
+---
+
+## Provider Support Matrix
+
+| Provider | Default Model | Context Window | Status | Live Verification |
+| :--- | :--- | :--- | :--- | :--- |
+| **OpenAI** | `gpt-4o` | 128k | Production ready | **Verified live** (explore, edit, autonomous fix loop) |
+| **Anthropic** | `claude-sonnet-5-5` | 1M | Implemented | Contract-tested; experimental, not live-verified |
+| **Google Gemini** | `gemini-2.5-pro` | 1M | Implemented | Contract-tested; experimental, not live-verified |
+| **Ollama (Local)** | `llama3.3` | 128k | Local runtime | Contract-tested; zero-cost local open weights |
+| **LM Studio (Local)** | `model` | 128k | Local runtime | Contract-tested; OpenAI-compatible local server |
+| **Mock Replayer** | Deterministic | Unlimited | Production ready | Verified in CI test suite |
+
+For complete provider setup instructions and model catalogs, see [docs/providers.md](docs/providers.md) and [docs/local-models.md](docs/local-models.md).
 
 ---
 
@@ -111,16 +127,64 @@ forge
 ```
 
 #### Deterministic Demo (No API Key Required)
-Run a scripted 60-second demonstration fixing a boundary condition bug:
+Run a scripted 60-second demonstration fixing a boundary condition bug (works without any external toolchain or Go installed):
 ```bash
 forge --demo
+# Or run with instant speed for validation
+forge --demo --demo-speed 0 --yes
 ```
 
-#### Headless Mode (One-Shot Execution)
-Automate a task directly from your shell:
+#### Headless Mode (One-Shot & Automation)
+Run commands directly from terminal scripts or CI pipelines using canonical `forge run`:
 ```bash
-forge --yes "Run the test suite, find failing tests, and fix them"
+# Basic run
+forge run "Run the test suite and fix failing boundary conditions" --yes
+
+# JSON streaming output with custom permission policy and turn budget
+forge run "Analyze code quality" --output json --permission-mode plan --max-turns 10
 ```
+For complete headless options, JSON schemas, and exit codes, see [docs/headless.md](docs/headless.md).
+
+#### Checkpoints & Atomic Undo
+Forge creates isolated shadow Git checkpoints before any tool mutates files. You can inspect or roll back changes at any time without touching your repository history:
+```bash
+# In TUI session:
+/checkpoints          # List recent checkpoints
+/undo                 # Roll back last agent turn
+/restore <id>         # Roll back to specific checkpoint
+
+# From CLI:
+forge checkpoints list
+forge undo
+forge checkpoints restore <id>
+```
+For architecture details and isolation guarantees, see [docs/checkpoints.md](docs/checkpoints.md).
+
+---
+
+## Session Persistence & Resume
+
+Forge automatically persists conversation sessions, tool invocations, tokens, and costs to an embedded SQLite database (`~/.forge/sessions.db`) with zero external daemon requirements.
+
+```bash
+# Resume most recent session in current workspace
+forge --resume
+
+# Resume a specific session by ID
+forge --resume s_1730000000_abcdef
+
+# In active TUI:
+/resume               # Open interactive session picker
+/resume <id>          # Switch directly to session
+
+# Manage stored sessions from CLI:
+forge sessions list          # List sessions for current workspace
+forge sessions list --all    # List sessions across all workspaces
+forge sessions show <id>     # Display session details, messages, and costs
+forge sessions delete <id>   # Delete a session and its history
+forge sessions prune         # Prune sessions older than 30 days
+```
+For schema details, crash-safety guarantees, and redaction, see [docs/sessions.md](docs/sessions.md).
 
 ---
 
@@ -153,7 +217,7 @@ To inspect the effective resolved configuration for your current workspace:
 forge config
 ```
 
-For the complete schema, environment variables, and precedence table, see [docs/configuration.md](docs/configuration.md).
+For the complete schema, environment variables, local Ollama setup, and precedence table, see [docs/configuration.md](docs/configuration.md).
 
 ---
 
@@ -165,10 +229,13 @@ For the complete schema, environment variables, and precedence table, see [docs/
 | **Slice 1: Core Contracts** | `DONE` | `Session`, `Event` streaming, mock replayer, loop guards |
 | **Slice 2: Chat & Streaming** | `DONE` | Bubble Tea interactive TUI, markdown rendering |
 | **Slice 3: Read-Only Tools** | `DONE` | `read_file`, `list_dir`, `grep`, `glob`, prompt injection defenses |
-| **Slice 3b: Multi-Provider** | `DONE` | OpenAI verified live; Anthropic and Gemini adapters implemented |
+| **Slice 3b: Multi-Provider** | `DONE` | OpenAI verified live; Anthropic and Gemini experimental, not live-verified |
 | **Slice 4: File Editing** | `DONE` | Exact string replacement (`edit_file`), unified diff review cards |
 | **Slice 5: Autonomous Fix Loop** | `DONE` | Native shell execution, process group kill, stall guard |
-| **Slice 6: Hardening & Release** | `DONE` | Layered config, themes, error guidance, goreleaser, 6 OS targets |
+| **Slice 6: Hardening & Release** | `DOING` | Layered config, themes, error guidance, goreleaser (awaiting fresh machine check and demo recording) |
+| **Slice 7: Checkpoints & Undo** | `DOING` | Shadow Git repo, atomic rollback, benchmarked on 10k files (awaiting live run) |
+| **Slice 8: Onboarding & Credentials** | `DOING` | OS keychain storage, `forge auth`, provider profiles, local runtimes, first-run wizard (awaiting live run) |
+| **Slice 9: Sessions & Persistence** | `DONE` | SQLite persistence, crash-safety synthesis, resume CLI & picker, undo continuity |
 | **Desktop App (Wails)** | `PARKED` | Planned for Phase 2 |
 | **LSP Integration** | `PARKED` | Planned for Phase 2 |
 

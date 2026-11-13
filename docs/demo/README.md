@@ -16,6 +16,20 @@ vhs docs/demo/demo.tape
 
 The output will be rendered to `docs/demo/demo.gif`.
 
+## Demo Flags & Simulation Speed
+
+Forge's `--demo` flag runs a completely self-contained, deterministic simulation of the autonomous fix loop. It operates with zero API keys and **requires no external Go or shell toolchain**:
+- `--demo`: Launches the boundary-condition fix simulation.
+- `--demo-speed <float>`: Multiplier for keystroke and streaming delays:
+  - `1.0` *(default)*: Realistic typing pace suitable for recordings and interactive previews.
+  - `0.5`: 2x faster execution.
+  - `0` or `0.0`: Instant execution (used by CI and automated test suites).
+
+Example instant execution for verification:
+```bash
+forge --demo --demo-speed 0 --yes
+```
+
 ## Prerequisites
 
 ### Windows
