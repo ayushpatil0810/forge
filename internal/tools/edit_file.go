@@ -101,7 +101,7 @@ func (e EditFile) NeedsApproval(input json.RawMessage) ApprovalRequest {
 	return ApprovalRequest{
 		Description: fmt.Sprintf("Edit %s", args.Path),
 		Diff:        diff,
-		IsProtected: IsProtectedPath(args.Path),
+		IsProtected: protectedPath(e.Root, args.Path, targetPath),
 	}
 }
 
