@@ -1,6 +1,16 @@
 /bin/
 /dist/
-forge
+/forge
 *.exe
 *.test
 .DS_Store
+
+# SQLite database files
+*.db
+*.db-wal
+*.db-shm
+
+# Runtime and credentials
+.forge/
+credentials.json
+.env*
