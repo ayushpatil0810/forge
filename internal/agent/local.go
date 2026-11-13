@@ -488,7 +488,7 @@ func (s *local) runToolCall(ctx context.Context, c llm.ToolCall) llm.Message {
 	}
 
 	start := time.Now()
-	streamCtx := tools.ContextWithStream(ctx, func(chunk string) {
+	streamer := redact.NewStream(func(chunk string) {
 		s.emit(Event{
 			Type: EventToolOutputDelta,
 			ToolOut: &ToolOutputDeltaPayload{
@@ -497,7 +497,9 @@ func (s *local) runToolCall(ctx context.Context, c llm.ToolCall) llm.Message {
 			},
 		})
 	})
+	streamCtx := tools.ContextWithStream(ctx, streamer.Write)
 	res, err := t.Run(streamCtx, json.RawMessage(c.Input))
+	streamer.Flush()
 	if ctx.Err() != nil {
 		return result(ToolCancelled, "cancelled by user", "cancelled by user", start)
 	}
