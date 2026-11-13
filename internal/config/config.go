@@ -272,23 +272,16 @@ func mergeProjectFile(dst *Config, path string) error {
 			if f, ok := v.(float64); ok && int(f) > 0 {
 				dst.MaxTokens = int(f)
 			}
-		case "system_prompt":
-			if s, ok := v.(string); ok && s != "" {
-				dst.SystemPrompt = s
-			}
 		case "checkpoints":
 			// Allowed project configuration
+		case "system_prompt":
+			reason := "a cloned repository must not set the system prompt"
+			dst.IgnoredProjectKeys["system_prompt"] = reason
+			dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Forbidden key %q in project config %q ignored (%s)", k, path, reason))
 		case "permission_mode":
-			if s, ok := v.(string); ok {
-				modeLower := strings.ToLower(strings.TrimSpace(s))
-				if modeLower == "ask" || modeLower == "accept-edits" || modeLower == "plan" {
-					dst.PermissionMode = modeLower
-				} else {
-					reason := fmt.Sprintf("value %q not permitted; project config may only set 'ask', 'accept-edits', or 'plan' (never 'yolo')", s)
-					dst.IgnoredProjectKeys["permission_mode"] = reason
-					dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Project configuration in %q attempted to set permission_mode to %q; %s", path, s, reason))
-				}
-			}
+			reason := "a cloned repository must not grant a permission mode"
+			dst.IgnoredProjectKeys["permission_mode"] = reason
+			dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Forbidden key %q in project config %q ignored (%s)", k, path, reason))
 		case "shell":
 			reason := "arbitrary code execution risk; shell can only be configured in user config or CLI flags"
 			dst.IgnoredProjectKeys["shell"] = reason

@@ -1292,6 +1292,7 @@ func runInteractive(ctx context.Context) error {
 		th = tui.DarkTheme()
 	}
 	m := tui.New(s, th)
+	m.SetSecurityNotices(cfg.Warnings)
 	m.SetProviderInfo(providerName, modelName)
 	m.SetBaseURL(cfg.BaseURL)
 	m.SetWorkspaceRoot(cfg.WorkspaceRoot)
