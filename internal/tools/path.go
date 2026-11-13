@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -58,34 +59,49 @@ func ResolveInRoot(root, p string) (string, error) {
 	return target, nil
 }
 
-// IsCredentialPath checks if a path matches credential patterns:
-// .env*, .ssh/, .aws/, *.pem, *.key, id_rsa*, credentials files (SEC-5, P-6).
-func IsCredentialPath(p string) bool {
+// IsProtectedPath reports whether any path segment is a protected name.
+// Comparison is case-insensitive on Windows and macOS. On Linux it is
+// case-sensitive, except .git which is case-insensitive everywhere (F-015).
+func IsProtectedPath(p string) bool {
 	norm := filepath.ToSlash(strings.TrimSpace(p))
 	norm = strings.TrimPrefix(norm, "./")
-	norm = strings.TrimPrefix(norm, "/")
-	if norm == "" {
-		return false
+	for _, part := range strings.Split(norm, "/") {
+		if part == "" || part == "." || part == ".." {
+			continue
+		}
+		if segmentProtected(part) {
+			return true
+		}
 	}
-	base := filepath.Base(norm)
-	lowerNorm := strings.ToLower(norm)
-	lowerBase := strings.ToLower(base)
+	return false
+}
 
-	if strings.HasPrefix(lowerNorm, ".ssh/") || lowerNorm == ".ssh" ||
-		strings.HasPrefix(lowerNorm, ".aws/") || lowerNorm == ".aws" ||
-		strings.HasPrefix(lowerNorm, ".git/") || lowerNorm == ".git" {
+// IsCredentialPath is the shared classifier. Callers that historically used
+// the credential-only helper now use the same rules as the policy floor.
+func IsCredentialPath(p string) bool {
+	return IsProtectedPath(p)
+}
+
+func segmentProtected(seg string) bool {
+	if strings.EqualFold(seg, ".git") {
 		return true
 	}
-	if strings.HasPrefix(lowerBase, ".env") {
+	cmp := seg
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		cmp = strings.ToLower(seg)
+	}
+	if cmp == ".env" || (strings.HasPrefix(cmp, ".env.") && len(cmp) > len(".env.")) {
 		return true
 	}
-	if strings.HasSuffix(lowerBase, ".pem") || strings.HasSuffix(lowerBase, ".key") {
+	switch cmp {
+	case ".ssh", ".aws", ".gnupg", "credentials", ".npmrc", ".pypirc", ".netrc":
 		return true
 	}
-	if strings.HasPrefix(lowerBase, "id_rsa") || strings.HasPrefix(lowerBase, "id_ed25519") || strings.HasPrefix(lowerBase, "id_ecdsa") {
+	if strings.HasSuffix(cmp, ".pem") || strings.HasSuffix(cmp, ".key") ||
+		strings.HasSuffix(cmp, ".pfx") || strings.HasSuffix(cmp, ".p12") {
 		return true
 	}
-	if lowerBase == "credentials" || lowerBase == "credentials.json" || lowerBase == "credentials.ini" {
+	if strings.HasPrefix(cmp, "id_rsa") || strings.HasPrefix(cmp, "id_ed25519") {
 		return true
 	}
 	return false
