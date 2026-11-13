@@ -57,7 +57,7 @@ func TestSessionPicker_GoldenSnapshots(t *testing.T) {
 
 	widths := []int{60, 80, 120}
 	for _, w := range widths {
-		rendered := picker.Render(w, styles)
+		rendered := stripANSI(picker.Render(w, styles))
 		if len(rendered) == 0 {
 			t.Fatalf("empty render output for width %d", w)
 		}
