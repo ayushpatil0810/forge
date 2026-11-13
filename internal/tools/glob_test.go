@@ -23,10 +23,10 @@ func runGlob(t *testing.T, root, pattern string) tools.Result {
 
 func TestGlobDoubleStar(t *testing.T) {
 	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, "a", "b", "c"), 0o755)
-	os.WriteFile(filepath.Join(dir, "root.go"), []byte("package main"), 0o644)
-	os.WriteFile(filepath.Join(dir, "a", "b", "c", "deep.go"), []byte("package c"), 0o644)
-	os.WriteFile(filepath.Join(dir, "a", "b", "c", "notes.txt"), []byte("notes"), 0o644)
+	_ = os.MkdirAll(filepath.Join(dir, "a", "b", "c"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "root.go"), []byte("package main"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "a", "b", "c", "deep.go"), []byte("package c"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "a", "b", "c", "notes.txt"), []byte("notes"), 0o644)
 
 	res := runGlob(t, dir, "**/*.go")
 	if res.IsError {
@@ -45,10 +45,10 @@ func TestGlobDoubleStar(t *testing.T) {
 
 func TestGlobRespectsGitignore(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("vendor/\n"), 0o644)
-	os.MkdirAll(filepath.Join(dir, "vendor", "mod"), 0o755)
-	os.WriteFile(filepath.Join(dir, "vendor", "mod", "mod.go"), []byte("package mod"), 0o644)
-	os.WriteFile(filepath.Join(dir, "app.go"), []byte("package main"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("vendor/\n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(dir, "vendor", "mod"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "vendor", "mod", "mod.go"), []byte("package mod"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "app.go"), []byte("package main"), 0o644)
 
 	res := runGlob(t, dir, "**/*.go")
 	if res.IsError {
@@ -61,4 +61,3 @@ func TestGlobRespectsGitignore(t *testing.T) {
 		t.Errorf("expected app.go in output, got:\n%s", res.Output)
 	}
 }
-

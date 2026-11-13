@@ -46,4 +46,3 @@ func TestGeminiModelsCatalog(t *testing.T) {
 		t.Error("default model gemini-2.5-pro not found in catalog")
 	}
 }
-

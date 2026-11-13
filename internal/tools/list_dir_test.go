@@ -23,9 +23,9 @@ func runListDir(t *testing.T, root, path string, recursive bool) tools.Result {
 
 func TestListDirBasicAndSorting(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "b.txt"), []byte("b"), 0o644)
-	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644)
-	os.MkdirAll(filepath.Join(dir, "sub"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "b.txt"), []byte("b"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644)
+	_ = os.MkdirAll(filepath.Join(dir, "sub"), 0o755)
 
 	res := runListDir(t, dir, ".", false)
 	if res.IsError {
@@ -46,11 +46,11 @@ func TestListDirBasicAndSorting(t *testing.T) {
 
 func TestListDirRespectsGitignore(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("ignored/\n*.log\n"), 0o644)
-	os.MkdirAll(filepath.Join(dir, "ignored"), 0o755)
-	os.WriteFile(filepath.Join(dir, "ignored", "secret.txt"), []byte("secret"), 0o644)
-	os.WriteFile(filepath.Join(dir, "app.log"), []byte("log"), 0o644)
-	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("ignored/\n*.log\n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(dir, "ignored"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "ignored", "secret.txt"), []byte("secret"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "app.log"), []byte("log"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0o644)
 
 	res := runListDir(t, dir, ".", false)
 	if res.IsError {
@@ -66,9 +66,9 @@ func TestListDirRespectsGitignore(t *testing.T) {
 
 func TestListDirRecursive(t *testing.T) {
 	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, "src", "pkg"), 0o755)
-	os.WriteFile(filepath.Join(dir, "src", "pkg", "lib.go"), []byte("package pkg"), 0o644)
-	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0o644)
+	_ = os.MkdirAll(filepath.Join(dir, "src", "pkg"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "src", "pkg", "lib.go"), []byte("package pkg"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0o644)
 
 	res := runListDir(t, dir, ".", true)
 	if res.IsError {
@@ -78,4 +78,3 @@ func TestListDirRecursive(t *testing.T) {
 		t.Errorf("expected src/pkg/lib.go in recursive listing, got:\n%s", res.Output)
 	}
 }
-

@@ -146,4 +146,3 @@ func TestEditFile_ProtectedPaths(t *testing.T) {
 		t.Fatalf("expected .env.production to be flagged as protected")
 	}
 }
-

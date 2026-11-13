@@ -1,0 +1,22 @@
+ ✕ ERROR [context_length_exceeded]                                              
+ Conversation exceeded maximum model tokens (128000)                            
+                                                                                
+ [i] How to fix: Switch to a higher-context model (e.g. --model) or start a     
+ new session.                                                                   
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+[] [openai/gpt-4o] git:main · Error · tokens: 0 in / 0 out
+❯ Ask Forge a question or describe a change... (Enter to send, Alt+Enter for  
+❯ newline)                                                                    
+❯                                                                             
+Enter: send · Alt+Enter: newline · Tab: mode · Esc: cancel · Ctrl+O: expand ·...

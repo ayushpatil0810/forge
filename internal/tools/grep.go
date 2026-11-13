@@ -133,7 +133,7 @@ func (g Grep) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 		if err != nil {
 			return nil
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 
 		// Binary check: read first 512 bytes
 		head := make([]byte, 512)
@@ -213,4 +213,3 @@ func (g Grep) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 
 	return Result{Output: strings.TrimRight(b.String(), "\n")}, nil
 }
-

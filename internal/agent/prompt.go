@@ -41,11 +41,12 @@ func BuildSystemPrompt(workspaceRoot string, shellConfig ...tools.ShellConfig) s
 	sb.WriteString("Syntax and execution guidance:\n")
 	if runtime.GOOS == "windows" {
 		sb.WriteString("- You are running on Windows. DO NOT assume a Unix bash environment.\n")
-		if sh.Type == tools.ShellPwsh || sh.Type == tools.ShellPowerShell {
+		switch sh.Type {
+		case tools.ShellPwsh, tools.ShellPowerShell:
 			sb.WriteString("- In PowerShell, sequence commands with ';' or separate lines, NEVER '&&'.\n")
 			sb.WriteString("- Path separators can be '\\' or '/'. Quote paths with spaces.\n")
 			sb.WriteString("- For testing and builds, invoke 'go test ./...' or native commands directly.\n")
-		} else if sh.Type == tools.ShellCmd {
+		case tools.ShellCmd:
 			sb.WriteString("- In Windows cmd, sequence commands with '&'. Use '\\' for file paths.\n")
 		}
 	} else {

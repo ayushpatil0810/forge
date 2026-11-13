@@ -63,4 +63,3 @@ func TestWriteFile(t *testing.T) {
 		t.Fatalf("file content mismatch: %s", string(overwritten))
 	}
 }
-

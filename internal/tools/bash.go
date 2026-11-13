@@ -200,7 +200,7 @@ func (b Bash) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 	// Setup process group / job object for clean process-tree termination
 	pg, err := setupProcessGroup(cmd)
 	if err != nil {
-		// Log but continue if process group creation is restricted
+		_ = err // Best effort: continue if process group creation is restricted
 	}
 
 	streamFn := StreamFromContext(ctx)

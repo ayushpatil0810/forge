@@ -104,7 +104,7 @@ func (r ReadFile) Run(_ context.Context, input json.RawMessage) (Result, error) 
 	if err != nil {
 		return Result{Output: fmt.Sprintf("read_file error opening file: %s", err), IsError: true}, nil
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Binary check: read first 512 bytes and check for null byte
 	header := make([]byte, 512)

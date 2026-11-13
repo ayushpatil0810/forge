@@ -1,0 +1,14 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                                                                              │
+│   Resume Session — Select a Previous Conversation                                                            │
+│                                                                                                              │
+│  Use ↑/↓ to navigate, Enter to resume, Esc to cancel:                                                        │
+│                                                                                                              │
+│  ❯ [s_1700000001_a] Fix boundary condition in discount ca... (14:20:00 | gpt-4o | 8 msgs | $0.0425)          │
+│    [s_1700000002_e] Refactor credential management store   (11:30:00 | claude-sonnet-5-5 | 14 msgs |         │
+│  $0.0890)                                                                                                    │
+│    [s_1700000003_i] Explore offline model performance      (Nov 11 15:30 | llama3.3 | 4 msgs | $0.0000)      │
+│                                                                                                              │
+│  Tip: sessions are automatically restored with message history, tool cards, and undo state.                  │
+│                                                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

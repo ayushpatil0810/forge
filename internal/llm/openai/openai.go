@@ -73,6 +73,46 @@ func init() {
 			BaseURL: cfg.BaseURL,
 		})
 	})
+
+	llm.RegisterProvider("ollama", func(cfg llm.ProviderConfig) (llm.Provider, error) {
+		baseURL := cfg.BaseURL
+		if baseURL == "" {
+			baseURL = "http://127.0.0.1:11434/v1"
+		}
+		model := cfg.Model
+		if model == "" {
+			model = "llama3.3"
+		}
+		apiKey := cfg.APIKey
+		if apiKey == "" {
+			apiKey = "ollama"
+		}
+		return New(Config{
+			APIKey:  apiKey,
+			Model:   model,
+			BaseURL: baseURL,
+		})
+	})
+
+	llm.RegisterProvider("lmstudio", func(cfg llm.ProviderConfig) (llm.Provider, error) {
+		baseURL := cfg.BaseURL
+		if baseURL == "" {
+			baseURL = "http://127.0.0.1:1234/v1"
+		}
+		model := cfg.Model
+		if model == "" {
+			model = "model"
+		}
+		apiKey := cfg.APIKey
+		if apiKey == "" {
+			apiKey = "lm-studio"
+		}
+		return New(Config{
+			APIKey:  apiKey,
+			Model:   model,
+			BaseURL: baseURL,
+		})
+	})
 }
 
 // Config holds OpenAI provider configuration options.
@@ -81,6 +121,26 @@ type Config struct {
 	Model   string
 	BaseURL string
 	Client  *http.Client
+}
+
+// NormalizeBaseURL normalizes an OpenAI-compatible base URL ensuring a /v1 suffix.
+// Ollama presets default to http://127.0.0.1:11434 (without /v1), while LM Studio
+// presets use http://127.0.0.1:1234/v1. Normalizing to ensure /v1 guarantees that
+// appending /chat/completions reaches the valid endpoint.
+//
+// Documentation references:
+// - Ollama OpenAI compatibility: https://github.com/ollama/ollama/blob/main/docs/openai.md
+// - LM Studio endpoints: https://lmstudio.ai/docs/api/endpoints
+func NormalizeBaseURL(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return defaultBaseURL
+	}
+	trimmed := strings.TrimRight(rawURL, "/")
+	if !strings.HasSuffix(trimmed, "/v1") {
+		return trimmed + "/v1"
+	}
+	return trimmed
 }
 
 // Provider implements llm.Provider for OpenAI.
@@ -92,26 +152,32 @@ type Provider struct {
 }
 
 // New creates a new OpenAI provider.
-// Fails fast with a friendly error if OPENAI_API_KEY is not set.
+// Fails fast with a friendly error if OPENAI_API_KEY is not set (unless a custom BaseURL like Ollama is configured).
 func New(cfg Config) (*Provider, error) {
+	baseURL := cfg.BaseURL
+	if baseURL == "" {
+		baseURL = os.Getenv("OPENAI_BASE_URL")
+	}
+	baseURL = NormalizeBaseURL(baseURL)
+
 	apiKey := cfg.APIKey
 	if apiKey == "" {
 		apiKey = os.Getenv("OPENAI_API_KEY")
 	}
+	// For local OpenAI-compatible proxies (such as Ollama or LocalAI),
+	// allow running without requiring a paid API key if a custom BaseURL is set.
 	if strings.TrimSpace(apiKey) == "" {
-		return nil, errors.New("openai: OPENAI_API_KEY environment variable is required; please set it or specify --api-key")
+		if baseURL != defaultBaseURL {
+			apiKey = "ollama"
+		} else {
+			return nil, errors.New("openai: OPENAI_API_KEY environment variable is required; please set it or run 'forge auth login openai'")
+		}
 	}
 
 	model := cfg.Model
 	if model == "" {
 		model = defaultModel
 	}
-
-	baseURL := cfg.BaseURL
-	if baseURL == "" {
-		baseURL = defaultBaseURL
-	}
-	baseURL = strings.TrimRight(baseURL, "/")
 
 	client := cfg.Client
 	if client == nil {
@@ -303,6 +369,18 @@ func (p *Provider) streamWithRetry(ctx context.Context, bodyBytes []byte, ch cha
 			if opCtx.Err() != nil {
 				return nil, false, 0, opCtx.Err()
 			}
+			errStr := strings.ToLower(doErr.Error())
+			if strings.Contains(errStr, "connection refused") || strings.Contains(errStr, "connectex") || strings.Contains(errStr, "actively refused") {
+				if strings.Contains(p.baseURL, "11434") {
+					return nil, false, 0, fmt.Errorf("connection refused: Ollama does not appear to be running at %s. Is Ollama running? Start it with 'ollama serve'", p.baseURL)
+				}
+				if strings.Contains(p.baseURL, "1234") {
+					return nil, false, 0, fmt.Errorf("connection refused: LM Studio does not appear to be running at %s. Start the local server in LM Studio under Developer > Local Server", p.baseURL)
+				}
+				if strings.Contains(p.baseURL, "127.0.0.1") || strings.Contains(p.baseURL, "localhost") {
+					return nil, false, 0, fmt.Errorf("connection refused: local model server is not running at %s; ensure your local LLM server is started", p.baseURL)
+				}
+			}
 			return nil, true, 0, fmt.Errorf("openai connection error: %w", doErr)
 		}
 
@@ -310,7 +388,7 @@ func (p *Provider) streamWithRetry(ctx context.Context, bodyBytes []byte, ch cha
 			return res, false, 0, nil
 		}
 
-		defer res.Body.Close()
+		defer func() { _ = res.Body.Close() }()
 		respBody, _ := io.ReadAll(res.Body)
 
 		isRetryable := retry.IsRetryableStatus(res.StatusCode)
@@ -329,6 +407,14 @@ func (p *Provider) streamWithRetry(ctx context.Context, bodyBytes []byte, ch cha
 			errMsg = fmt.Sprintf("openai API error (%d): %s", res.StatusCode, strings.TrimSpace(string(respBody)))
 		}
 
+		// Tool calling rejection handling (fail fast, non-looping, suggest plan mode)
+		if res.StatusCode == http.StatusBadRequest || res.StatusCode == http.StatusUnprocessableEntity {
+			lowerMsg := strings.ToLower(errMsg)
+			if strings.Contains(lowerMsg, "tool") || strings.Contains(lowerMsg, "function") || strings.Contains(lowerMsg, "not support") || strings.Contains(lowerMsg, "unrecognized request argument") {
+				return nil, false, 0, fmt.Errorf("model %q does not support tool calling: %s. Use a tool-capable model (e.g. qwen2.5-coder, llama3.3) or run with 'plan' mode (which does not execute tools)", p.model, errMsg)
+			}
+		}
+
 		return nil, isRetryable, retryAfter, errors.New(errMsg)
 	})
 
@@ -340,7 +426,7 @@ func (p *Provider) streamWithRetry(ctx context.Context, bodyBytes []byte, ch cha
 		return
 	}
 
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	err = p.parseSSEStream(ctx, resp.Body, ch)
 	if err != nil {
 		select {

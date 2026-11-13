@@ -179,4 +179,3 @@ func TestRetryCallbackInvoked(t *testing.T) {
 		t.Fatalf("expected last attempt to be 2, got %d", lastAttempt)
 	}
 }
-

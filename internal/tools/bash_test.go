@@ -39,7 +39,7 @@ func TestHelperProcess(t *testing.T) {
 		if err != nil {
 			os.Exit(1)
 		}
-		defer ln.Close()
+		defer func() { _ = ln.Close() }()
 		_, _ = ln.Accept()
 	default:
 		os.Exit(0)
@@ -93,11 +93,12 @@ func TestBashTool_TimeoutAndKill(t *testing.T) {
 	tool := Bash{Root: tempDir, Shell: sh}
 
 	var sleepCmd string
-	if sh.Type == ShellPwsh || sh.Type == ShellPowerShell {
+	switch sh.Type {
+	case ShellPwsh, ShellPowerShell:
 		sleepCmd = "Start-Sleep -Seconds 10"
-	} else if sh.Type == ShellCmd {
+	case ShellCmd:
 		sleepCmd = "timeout /t 10 /nobreak"
-	} else {
+	default:
 		sleepCmd = "sleep 10"
 	}
 
@@ -214,11 +215,12 @@ func TestBashTool_ParametersAndStdin(t *testing.T) {
 
 	// 4. Stdin is closed (immediately reaches EOF)
 	var stdinCmd string
-	if sh.Type == ShellPwsh || sh.Type == ShellPowerShell {
+	switch sh.Type {
+	case ShellPwsh, ShellPowerShell:
 		stdinCmd = "$in = [Console]::In.ReadToEnd(); Write-Host 'done:' $in.Length"
-	} else if sh.Type == ShellCmd {
+	case ShellCmd:
 		stdinCmd = "echo done"
-	} else {
+	default:
 		stdinCmd = "cat; echo done"
 	}
 

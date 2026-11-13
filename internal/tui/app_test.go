@@ -250,7 +250,7 @@ func TestTUIWelcomeBannerAndFooter(t *testing.T) {
 	if !strings.Contains(view, "Model:    claude-sonnet-5-5") {
 		t.Fatalf("expected model in welcome banner, got:\n%s", view)
 	}
-	if !strings.Contains(view, "Branch:   🌿 main") {
+	if !strings.Contains(view, "Branch:   git:main") {
 		t.Fatalf("expected branch in welcome banner, got:\n%s", view)
 	}
 	if !strings.Contains(view, "v0.1.0-test") {
@@ -261,7 +261,7 @@ func TestTUIWelcomeBannerAndFooter(t *testing.T) {
 	if !strings.Contains(view, "[anthropic/claude-sonnet-5-5]") {
 		t.Fatalf("expected provider/model in footer, got:\n%s", view)
 	}
-	if !strings.Contains(view, "🌿 main") {
+	if !strings.Contains(view, "git:main") {
 		t.Fatalf("expected branch in footer, got:\n%s", view)
 	}
 	if !strings.Contains(view, "tokens:") {
@@ -285,12 +285,78 @@ func TestTUINarrowAndShortLayout(t *testing.T) {
 
 	view := stripANSI(m.View())
 
-	// Compact banner header (🔨 FORGE instead of ascii art)
-	if !strings.Contains(view, "🔨 FORGE") {
+	// Compact banner header (FORGE instead of ascii art)
+	if !strings.Contains(view, "FORGE") {
 		t.Fatalf("expected compact banner for narrow terminal, got:\n%s", view)
 	}
 	// Under height 20, help text is omitted to maximize viewport
 	if strings.Contains(view, "Alt+Enter: newline") {
 		t.Fatalf("expected help bar to be hidden in short terminal (<20 lines), got:\n%s", view)
+	}
+}
+
+func TestTUIApprovalSessionAllow(t *testing.T) {
+	p := mock.New()
+	s := agent.NewLocal(agent.Config{Provider: p})
+	defer s.Close()
+
+	m := tui.New(s, tui.DarkTheme())
+	newM, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = newM.(tui.Model)
+
+	// Safe approval request (edit)
+	safeApproval := agent.Event{
+		Type: agent.EventApprovalRequested,
+		Approval: &agent.ApprovalRequestedPayload{
+			ID:          "call_safe",
+			Tool:        "edit_file",
+			Description: "Edit safe.go",
+			IsDangerous: false,
+		},
+	}
+	newM, _ = m.Update(safeApproval)
+	m = newM.(tui.Model)
+
+	viewSafe := stripANSI(m.View())
+	if !strings.Contains(viewSafe, "[a] Session allow") {
+		t.Fatalf("expected '[a] Session allow' for safe approval, got:\n%s", viewSafe)
+	}
+
+	// Pressing 'a' should approve for session
+	keyA := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}}
+	newM, _ = m.Update(keyA)
+	m = newM.(tui.Model)
+
+	viewAfterA := stripANSI(m.View())
+	if strings.Contains(viewAfterA, "Approval Required") {
+		t.Fatalf("expected approval prompt to clear after 'a', got:\n%s", viewAfterA)
+	}
+
+	// Dangerous approval request (e.g. dangerous command)
+	dangApproval := agent.Event{
+		Type: agent.EventApprovalRequested,
+		Approval: &agent.ApprovalRequestedPayload{
+			ID:          "call_dang",
+			Tool:        "bash",
+			Description: "rm -rf /",
+			Command:     "rm -rf /",
+			IsDangerous: true,
+		},
+	}
+	newM, _ = m.Update(dangApproval)
+	m = newM.(tui.Model)
+
+	viewDang := stripANSI(m.View())
+	if strings.Contains(viewDang, "[a] Session allow") {
+		t.Fatalf("never offer session allow '[a]' for dangerous commands, got:\n%s", viewDang)
+	}
+
+	// Pressing 'a' on dangerous approval must NOT clear the prompt
+	newM, _ = m.Update(keyA)
+	m = newM.(tui.Model)
+
+	viewAfterDangA := stripANSI(m.View())
+	if !strings.Contains(viewAfterDangA, "Approval Required") {
+		t.Fatalf("expected dangerous approval to remain active after 'a', got:\n%s", viewAfterDangA)
 	}
 }

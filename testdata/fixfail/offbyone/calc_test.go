@@ -10,4 +10,3 @@ func TestSumRange(t *testing.T) {
 		t.Fatalf("SumRange(nums, 1, 3) = %d; want %d", got, want)
 	}
 }
-

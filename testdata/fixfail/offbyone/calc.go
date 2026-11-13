@@ -8,4 +8,3 @@ func SumRange(nums []int, start, end int) int {
 	}
 	return total
 }
-

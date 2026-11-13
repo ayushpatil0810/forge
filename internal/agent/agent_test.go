@@ -61,8 +61,8 @@ func next(t *testing.T, s agent.Session, want agent.EventType) agent.Event {
 // Slice 1 exit check: a scripted transcript with two tool calls runs to Done in a test.
 func TestScriptedTranscriptWithTwoToolCallsRunsToDone(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "one.txt"), []byte("first content\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, "two.txt"), []byte("second content\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "one.txt"), []byte("first content\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "two.txt"), []byte("second content\n"), 0o644)
 
 	p := mock.New(
 		// Turn 1: model asks to read one.txt
@@ -273,7 +273,7 @@ func TestPlanModeDeniesWritesWithoutAsking(t *testing.T) {
 
 func TestMaxTurnsStopsRunawayLoops(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0o644)
 	turn1 := mock.Turn{mock.ToolUse("c1", "read_file", map[string]any{"path": "a.txt"})}
 	turn2 := mock.Turn{mock.ToolUse("c2", "read_file", map[string]any{"path": "a.txt", "offset": 10})}
 	turn3 := mock.Turn{mock.ToolUse("c3", "read_file", map[string]any{"path": "a.txt", "offset": 20})}
@@ -305,7 +305,7 @@ func TestMaxTurnsStopsRunawayLoops(t *testing.T) {
 
 func TestRepeatedIdenticalCallsLoopGuard(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0o644)
 	turn := mock.Turn{mock.ToolUse("c", "read_file", map[string]any{"path": "a.txt"})}
 
 	s := agent.NewLocal(agent.Config{
@@ -428,4 +428,88 @@ func TestSessionModeSwitching(t *testing.T) {
 	if s.Mode() != permission.ModePlan {
 		t.Fatalf("expected mode plan, got %v", s.Mode())
 	}
+}
+
+type mockCheckpointer struct {
+	createCalls []string
+}
+
+func (m *mockCheckpointer) Create(ctx context.Context, message string) (agent.CheckpointInfo, error) {
+	m.createCalls = append(m.createCalls, message)
+	return agent.CheckpointInfo{
+		ID:        "chk_12345",
+		Message:   message,
+		Timestamp: time.Now(),
+	}, nil
+}
+
+func (m *mockCheckpointer) Restore(ctx context.Context, id string) (agent.CheckpointInfo, error) {
+	return agent.CheckpointInfo{ID: id}, nil
+}
+
+func (m *mockCheckpointer) List(ctx context.Context, limit int) ([]agent.CheckpointInfo, error) {
+	return nil, nil
+}
+
+func TestLazyCheckpointTriggering(t *testing.T) {
+	mockChk := &mockCheckpointer{}
+	p := mock.New(
+		mock.Turn{
+			// Read tool should NOT trigger checkpoint
+			mock.ToolUse("r1", "read_file", map[string]any{"path": "a.go"}),
+		},
+		mock.Turn{
+			// Mutating tool should trigger checkpoint lazily before running
+			mock.ToolUse("e1", "edit_file", map[string]any{"path": "a.go"}),
+			// Second mutating tool in SAME turn should NOT trigger duplicate checkpoint
+			mock.ToolUse("e2", "edit_file", map[string]any{"path": "b.go"}),
+		},
+		mock.Turn{
+			mock.Text("done"),
+		},
+	)
+
+	s := agent.NewLocal(agent.Config{
+		Provider:     p,
+		Tools:        tools.NewRegistry(fakeReadTool{}, fakeEditTool{}),
+		Checkpointer: mockChk,
+		Policy:       permission.Policy{Mode: permission.ModeAcceptEdits},
+	})
+	defer s.Close()
+
+	if err := s.Send(context.Background(), "do work"); err != nil {
+		t.Fatal(err)
+	}
+
+	checkpointEvents := 0
+	for ev := range s.Events() {
+		if ev.Type == agent.EventCheckpointCreated {
+			checkpointEvents++
+			if ev.Checkpt == nil || ev.Checkpt.ID != "chk_12345" {
+				t.Fatalf("expected CheckpointCreated event with ID chk_12345, got %+v", ev.Checkpt)
+			}
+		}
+		if ev.Terminal() {
+			break
+		}
+	}
+
+	if len(mockChk.createCalls) != 1 {
+		t.Fatalf("expected exactly 1 checkpoint creation for turn with mutating tools, got %d", len(mockChk.createCalls))
+	}
+	if checkpointEvents != 1 {
+		t.Fatalf("expected exactly 1 EventCheckpointCreated event, got %d", checkpointEvents)
+	}
+}
+
+type fakeReadTool struct{}
+
+func (fakeReadTool) Name() string            { return "read_file" }
+func (fakeReadTool) Description() string     { return "fake read" }
+func (fakeReadTool) Schema() json.RawMessage { return json.RawMessage(`{}`) }
+func (fakeReadTool) NeedsApproval(json.RawMessage) tools.ApprovalRequest {
+	return tools.ApprovalRequest{}
+}
+func (fakeReadTool) Run(context.Context, json.RawMessage) (tools.Result, error) {
+	return tools.Result{Output: "read ok"}, nil
 }

@@ -4,7 +4,29 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 )
+
+var (
+	registeredMu      sync.RWMutex
+	registeredSecrets []string
+)
+
+// RegisterSecret registers a sensitive string with the redactor.
+func RegisterSecret(s string) {
+	s = strings.TrimSpace(s)
+	if len(s) < 6 {
+		return
+	}
+	registeredMu.Lock()
+	defer registeredMu.Unlock()
+	for _, existing := range registeredSecrets {
+		if existing == s {
+			return
+		}
+	}
+	registeredSecrets = append(registeredSecrets, s)
+}
 
 var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(sk-ant-[a-zA-Z0-9_\-]{10,})\b`),
@@ -19,6 +41,16 @@ var secretPatterns = []*regexp.Regexp{
 // RedactSecrets replaces sensitive API keys, tokens, and credentials with safe placeholders.
 func RedactSecrets(s string) string {
 	res := s
+
+	// Check dynamically registered secrets (e.g. from user input, CLI login, or keychain)
+	registeredMu.RLock()
+	for _, sec := range registeredSecrets {
+		if len(sec) >= 6 && strings.Contains(res, sec) {
+			res = strings.ReplaceAll(res, sec, "[REDACTED SECRET]")
+		}
+	}
+	registeredMu.RUnlock()
+
 	// Check known environment API keys
 	for _, envVar := range []string{
 		"ANTHROPIC_API_KEY",

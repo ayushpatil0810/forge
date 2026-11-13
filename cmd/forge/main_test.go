@@ -1,0 +1,267 @@
+package main
+
+import (
+	"bytes"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/ayushpatil0810/forge/internal/agent"
+)
+
+func TestRootCmdVersion(t *testing.T) {
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--version"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error executing --version: %v", err)
+	}
+
+	got := out.String()
+	if !strings.Contains(got, "forge 0.1.0-dev") {
+		t.Fatalf("expected version output to contain 'forge 0.1.0-dev', got %q", got)
+	}
+}
+
+func TestRootCmdHelp(t *testing.T) {
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error executing --help: %v", err)
+	}
+
+	got := out.String()
+	if !strings.Contains(got, "Forge is a provider-agnostic terminal AI coding agent") {
+		t.Fatalf("expected help output to contain short description, got %q", got)
+	}
+}
+
+func TestRootCmdMissingAPIKeyFailsFast(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"hello"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when ANTHROPIC_API_KEY is missing")
+	}
+	if !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
+		t.Fatalf("expected error to mention ANTHROPIC_API_KEY, got: %v", err)
+	}
+}
+
+func TestRootCmdDemoFlagExecutes(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--demo", "--yes", "fix failing test"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error in demo mode: %v", err)
+	}
+}
+
+func TestConfigSubcommand(t *testing.T) {
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"config"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error executing 'forge config': %v", err)
+	}
+
+	got := out.String()
+	if !strings.Contains(got, `"provider":`) || !strings.Contains(got, `"model":`) {
+		t.Fatalf("expected JSON config output, got: %s", got)
+	}
+}
+
+func TestDecideHeadlessApproval(t *testing.T) {
+	tests := []struct {
+		name        string
+		isDangerous bool
+		isProtected bool
+		yes         bool
+		yolo        bool
+		want        agent.Decision
+		wantReason  string
+	}{
+		{
+			name:        "ordinary command without flags auto-denies",
+			isDangerous: false,
+			isProtected: false,
+			yes:         false,
+			yolo:        false,
+			want:        agent.DecisionDeny,
+			wantReason:  "approval requested in headless mode; use --yes to approve",
+		},
+		{
+			name:        "ordinary command with --yes is approved",
+			isDangerous: false,
+			isProtected: false,
+			yes:         true,
+			yolo:        false,
+			want:        agent.DecisionAllow,
+			wantReason:  "",
+		},
+		{
+			name:        "ordinary command with --yolo is approved",
+			isDangerous: false,
+			isProtected: false,
+			yes:         false,
+			yolo:        true,
+			want:        agent.DecisionAllow,
+			wantReason:  "",
+		},
+		{
+			name:        "dangerous command without flags is denied",
+			isDangerous: true,
+			isProtected: false,
+			yes:         false,
+			yolo:        false,
+			want:        agent.DecisionDeny,
+			wantReason:  "dangerous command requires --yolo",
+		},
+		{
+			name:        "dangerous command with --yes only is still denied",
+			isDangerous: true,
+			isProtected: false,
+			yes:         true,
+			yolo:        false,
+			want:        agent.DecisionDeny,
+			wantReason:  "dangerous command requires --yolo",
+		},
+		{
+			name:        "dangerous command with --yolo is approved",
+			isDangerous: true,
+			isProtected: false,
+			yes:         false,
+			yolo:        true,
+			want:        agent.DecisionAllow,
+			wantReason:  "",
+		},
+		{
+			name:        "protected path modification is always denied in headless",
+			isDangerous: false,
+			isProtected: true,
+			yes:         true,
+			yolo:        false,
+			want:        agent.DecisionDeny,
+			wantReason:  "protected path modification cannot be auto-approved in headless mode",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotDecision, gotReason := decideHeadlessApproval(tt.isDangerous, tt.isProtected, tt.yes, tt.yolo)
+			if gotDecision != tt.want {
+				t.Fatalf("decideHeadlessApproval(%v, %v, %v, %v) decision = %v, want %v",
+					tt.isDangerous, tt.isProtected, tt.yes, tt.yolo, gotDecision, tt.want)
+			}
+			if gotReason != tt.wantReason {
+				t.Fatalf("decideHeadlessApproval(%v, %v, %v, %v) reason = %q, want %q",
+					tt.isDangerous, tt.isProtected, tt.yes, tt.yolo, gotReason, tt.wantReason)
+			}
+		})
+	}
+}
+
+func TestForgeRunHeadlessJSON(t *testing.T) {
+	cmd := newRootCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetArgs([]string{"run", "--demo", "--demo-speed", "0", "--yes", "--output", "json", "Fix the failing test"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error in forge run --output json: %v", err)
+	}
+}
+
+func TestForgeRunInvalidFlagsExitCode(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"run", "--output", "invalid-format", "Fix test"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for invalid --output format")
+	}
+
+	var exitErr ExitCodeError
+	if errors.As(err, &exitErr) {
+		if exitErr.Code != 2 {
+			t.Fatalf("expected exit code 2 for invalid flag value, got %d", exitErr.Code)
+		}
+	} else {
+		t.Fatalf("expected ExitCodeError, got %T: %v", err, err)
+	}
+}
+
+func TestForgeRunRequiresPromptArgument(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"run"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when prompt argument is missing")
+	}
+}
+
+func TestDemoWithoutExternalToolchain(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--demo", "--demo-speed", "0", "--yes", "Fix boundary bug"})
+
+	// Empty PATH test: ensure demo doesn't need external go/git/bash on host
+	t.Setenv("PATH", "")
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("expected demo to run cleanly even with empty PATH, got: %v", err)
+	}
+}
+
+func TestForbiddenKeyFlagsFailWithExitCode2(t *testing.T) {
+	flagsToTest := []string{
+		"--api-key",
+		"--key",
+		"--api_key",
+		"--anthropic-key",
+		"--openai-api-key",
+	}
+
+	for _, flag := range flagsToTest {
+		t.Run(flag, func(t *testing.T) {
+			cmd := newRootCmd()
+			cmd.SetArgs([]string{flag, "sk-secret-key-1234"})
+			err := cmd.Execute()
+			if err == nil {
+				t.Fatalf("expected error passing %s, got nil", flag)
+			}
+			var exitErr ExitCodeError
+			if !errors.As(err, &exitErr) {
+				t.Fatalf("expected ExitCodeError, got %T: %v", err, err)
+			}
+			if exitErr.Code != 2 {
+				t.Fatalf("expected exit code 2, got %d", exitErr.Code)
+			}
+			if !strings.Contains(exitErr.Error(), "forge auth login") {
+				t.Fatalf("expected error to hint 'forge auth login', got: %v", exitErr)
+			}
+		})
+	}
+
+	t.Run("run_subcommand_with_api_key", func(t *testing.T) {
+		cmd := newRootCmd()
+		cmd.SetArgs([]string{"run", "--api-key", "sk-secret-key-1234", "my prompt"})
+		err := cmd.Execute()
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		var exitErr ExitCodeError
+		if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+			t.Fatalf("expected ExitCodeError with code 2, got %v", err)
+		}
+	})
+}

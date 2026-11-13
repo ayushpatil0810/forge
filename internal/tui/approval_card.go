@@ -19,7 +19,7 @@ func RenderApprovalCard(app *agent.ApprovalRequestedPayload, mode string, showDi
 	}
 
 	var sb strings.Builder
-	title := styles.ToolCardError.Bold(true).Render("⚠️  Approval Required")
+	title := styles.ToolCardError.Bold(true).Render("[!] Approval Required")
 	sb.WriteString(title)
 	sb.WriteString("\n")
 
@@ -51,14 +51,18 @@ func RenderApprovalCard(app *agent.ApprovalRequestedPayload, mode string, showDi
 		}
 	}
 
-	actions := fmt.Sprintf(
-		"%s  %s  %s  %s",
-		styles.ToolCardSuccess.Bold(true).Render("[y] Approve"),
-		styles.ToolCardError.Bold(true).Render("[n] Reject"),
-		styles.SystemInfo.Render("[e] Diff"),
-		styles.StatusBar.Render(fmt.Sprintf("[Tab] Mode: %s", mode)),
-	)
-	sb.WriteString("\n" + actions)
+	var actionItems []string
+	actionItems = append(actionItems, styles.ToolCardSuccess.Bold(true).Render("[y] Approve"))
+	if !app.IsDangerous {
+		actionItems = append(actionItems, styles.ToolCardSuccess.Render("[a] Session allow"))
+	}
+	actionItems = append(actionItems, styles.ToolCardError.Bold(true).Render("[n] Reject"))
+	if app.Diff != "" {
+		actionItems = append(actionItems, styles.SystemInfo.Render("[e] Diff"))
+	}
+	actionItems = append(actionItems, styles.StatusBar.Render(fmt.Sprintf("[Tab] Mode: %s", mode)))
+
+	sb.WriteString("\n" + strings.Join(actionItems, "  "))
 
 	boxStyle := styles.BorderBox.
 		Padding(0, 1).

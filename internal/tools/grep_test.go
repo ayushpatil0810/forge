@@ -30,9 +30,9 @@ func runGrep(t *testing.T, root, query, path, glob string) tools.Result {
 
 func TestGrepFindsMatches(t *testing.T) {
 	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, "pkg"), 0o755)
-	os.WriteFile(filepath.Join(dir, "pkg", "hello.go"), []byte("package pkg\n\nfunc SayHello() string {\n\treturn \"Hello World\"\n}\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Title\nSayHello example here\n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(dir, "pkg"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "pkg", "hello.go"), []byte("package pkg\n\nfunc SayHello() string {\n\treturn \"Hello World\"\n}\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Title\nSayHello example here\n"), 0o644)
 
 	res := runGrep(t, dir, "SayHello", "", "")
 	if res.IsError {
@@ -48,8 +48,8 @@ func TestGrepFindsMatches(t *testing.T) {
 
 func TestGrepWithGlobFilter(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "code.go"), []byte("target string"), 0o644)
-	os.WriteFile(filepath.Join(dir, "code.md"), []byte("target string"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "code.go"), []byte("target string"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "code.md"), []byte("target string"), 0o644)
 
 	res := runGrep(t, dir, "target", "", "*.go")
 	if res.IsError {
@@ -65,10 +65,10 @@ func TestGrepWithGlobFilter(t *testing.T) {
 
 func TestGrepSkipsBinaryAndIgnored(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("ignored.txt\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, "ignored.txt"), []byte("needle in ignored"), 0o644)
-	os.WriteFile(filepath.Join(dir, "binary.dat"), []byte("needle\x00binary"), 0o644)
-	os.WriteFile(filepath.Join(dir, "valid.txt"), []byte("needle in valid"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("ignored.txt\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "ignored.txt"), []byte("needle in ignored"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "binary.dat"), []byte("needle\x00binary"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "valid.txt"), []byte("needle in valid"), 0o644)
 
 	res := runGrep(t, dir, "needle", "", "")
 	if res.IsError {
@@ -92,4 +92,3 @@ func TestGrepInvalidRegex(t *testing.T) {
 		t.Errorf("expected invalid regex error, got: %+v", res)
 	}
 }
-

@@ -70,4 +70,3 @@ func (s ShellConfig) BuildArgs(command string) []string {
 		return []string{"-c", command}
 	}
 }
-

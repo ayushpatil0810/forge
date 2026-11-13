@@ -89,7 +89,7 @@ func New(cfg Config) (*Provider, error) {
 		apiKey = os.Getenv("GOOGLE_API_KEY")
 	}
 	if strings.TrimSpace(apiKey) == "" {
-		return nil, errors.New("gemini: GEMINI_API_KEY (or GOOGLE_API_KEY) environment variable is required; please set it or specify --api-key")
+		return nil, errors.New("gemini: GEMINI_API_KEY (or GOOGLE_API_KEY) environment variable is required; please set it or run 'forge auth login gemini'")
 	}
 
 	model := cfg.Model
@@ -306,7 +306,7 @@ func (p *Provider) streamWithRetry(ctx context.Context, bodyBytes []byte, ch cha
 			return res, false, 0, nil
 		}
 
-		defer res.Body.Close()
+		defer func() { _ = res.Body.Close() }()
 		respBody, _ := io.ReadAll(res.Body)
 
 		isRetryable := retry.IsRetryableStatus(res.StatusCode)
@@ -337,7 +337,7 @@ func (p *Provider) streamWithRetry(ctx context.Context, bodyBytes []byte, ch cha
 		return
 	}
 
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	err = p.parseSSEStream(ctx, resp.Body, ch)
 	if err != nil {
 		select {

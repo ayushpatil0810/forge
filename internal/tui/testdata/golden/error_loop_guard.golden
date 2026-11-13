@@ -1,0 +1,22 @@
+ ✕ ERROR [loop_guard]                                                           
+ Execution halted: agent took 10 tool calls without user intervention           
+                                                                                
+ [i] How to fix: Loop guard triggered to prevent runaway execution.             
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+[] [openai/gpt-4o] git:main · Error · tokens: 0 in / 0 out
+❯ Ask Forge a question or describe a change... (Enter to send, Alt+Enter for  
+❯ newline)                                                                    
+❯                                                                             
+Enter: send · Alt+Enter: newline · Tab: mode · Esc: cancel · Ctrl+O: expand ·...

@@ -37,7 +37,7 @@ func TestReadFileNumbersLinesAndPagination(t *testing.T) {
 		lines[i] = fmt.Sprintf("line number %d", i+1)
 	}
 	content := strings.Join(lines, "\n")
-	os.WriteFile(filepath.Join(dir, "numbers.txt"), []byte(content), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "numbers.txt"), []byte(content), 0o644)
 
 	// Read lines 10 to 19 (offset 10, limit 10)
 	res := runReadFile(t, dir, "numbers.txt", 10, 10)
@@ -61,7 +61,7 @@ func TestReadFileNumbersLinesAndPagination(t *testing.T) {
 func TestReadFileDetectsBinaryFiles(t *testing.T) {
 	dir := t.TempDir()
 	binData := []byte("hello\x00world\x01\x02binary")
-	os.WriteFile(filepath.Join(dir, "test.bin"), binData, 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "test.bin"), binData, 0o644)
 
 	res := runReadFile(t, dir, "test.bin", 1, 100)
 	if !res.IsError {
@@ -75,7 +75,7 @@ func TestReadFileDetectsBinaryFiles(t *testing.T) {
 func TestReadFileExceedsSizeCap(t *testing.T) {
 	dir := t.TempDir()
 	largeData := bytes.Repeat([]byte("a"), tools.MaxFileSize+10)
-	os.WriteFile(filepath.Join(dir, "large.txt"), largeData, 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "large.txt"), largeData, 0o644)
 
 	res := runReadFile(t, dir, "large.txt", 1, 100)
 	if !res.IsError {
@@ -90,7 +90,7 @@ func TestReadFileActionableErrors(t *testing.T) {
 	dir := t.TempDir()
 	// Directory instead of file
 	subDir := filepath.Join(dir, "subdir")
-	os.MkdirAll(subDir, 0o755)
+	_ = os.MkdirAll(subDir, 0o755)
 
 	resDir := runReadFile(t, dir, "subdir", 1, 100)
 	if !resDir.IsError || !strings.Contains(resDir.Output, "directory") {
@@ -104,7 +104,7 @@ func TestReadFileActionableErrors(t *testing.T) {
 	}
 
 	// Offset out of range
-	os.WriteFile(filepath.Join(dir, "small.txt"), []byte("line1\nline2"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "small.txt"), []byte("line1\nline2"), 0o644)
 	resOffset := runReadFile(t, dir, "small.txt", 10, 10)
 	if !resOffset.IsError || !strings.Contains(resOffset.Output, "past end of file") {
 		t.Errorf("expected past end of file error, got: %+v", resOffset)

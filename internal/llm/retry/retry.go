@@ -138,4 +138,3 @@ func Do(ctx context.Context, cfg Config, op Operation) (*http.Response, error) {
 
 	return nil, ctx.Err()
 }
-

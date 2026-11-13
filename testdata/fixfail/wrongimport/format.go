@@ -9,4 +9,3 @@ func FormatBanner(name string) string {
 	clean := strings.TrimSpace(name)
 	return fmt.Sprintf("=== %s ===", clean)
 }
-

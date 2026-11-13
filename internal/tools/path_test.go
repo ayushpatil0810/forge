@@ -81,4 +81,3 @@ func TestResolveInRootSymlinkEscape(t *testing.T) {
 		t.Fatal("expected error resolving symlink that points outside workspace")
 	}
 }
-

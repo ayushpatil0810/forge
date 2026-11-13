@@ -29,4 +29,3 @@ func (pg *ProcessGroup) Kill(cmd *exec.Cmd) {
 		_ = cmd.Process.Kill()
 	}
 }
-

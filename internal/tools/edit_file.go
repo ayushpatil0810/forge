@@ -214,9 +214,7 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	if err := tmpFile.Close(); err != nil {
 		return fmt.Errorf("closing temp file: %w", err)
 	}
-	if err := os.Chmod(tmpName, perm); err != nil {
-		// Ignore chmod error on platforms that don't support it (e.g. Windows)
-	}
+	_ = os.Chmod(tmpName, perm)
 
 	// On Windows, rename fails if destination exists unless using atomic replace
 	if err := replaceFile(tmpName, path); err != nil {
@@ -240,12 +238,12 @@ func replaceFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 	_, err = io.Copy(out, in)
 	return err
 }
@@ -262,4 +260,3 @@ func formatSnippet(content string, maxLines int) string {
 	}
 	return b.String()
 }
-

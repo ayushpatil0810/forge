@@ -21,3 +21,17 @@ func DefaultTools(workspaceRoot string, shells ...ShellConfig) *Registry {
 	)
 }
 
+// DemoTools returns a tool registry tailored for the deterministic demo scenario.
+// read_file and edit_file remain real; bash uses DemoBash to run on any host without a Go compiler.
+func DemoTools(workspaceRoot string, speed float64) *Registry {
+	tracker := NewReadTracker()
+	return NewRegistry(
+		ReadFile{Root: workspaceRoot, Tracker: tracker},
+		WriteFile{Root: workspaceRoot, Tracker: tracker},
+		EditFile{Root: workspaceRoot, Tracker: tracker},
+		ListDir{Root: workspaceRoot},
+		Glob{Root: workspaceRoot},
+		Grep{Root: workspaceRoot},
+		NewDemoBash(workspaceRoot, speed),
+	)
+}

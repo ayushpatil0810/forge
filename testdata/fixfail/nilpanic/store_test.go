@@ -9,4 +9,3 @@ func TestCache(t *testing.T) {
 		t.Fatalf("got %q, want secret123", got)
 	}
 }
-

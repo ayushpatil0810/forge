@@ -138,7 +138,7 @@ func LightTheme() Theme {
 		Accent:       lipgloss.Color("#d81b60"),
 		Muted:        lipgloss.Color("#495057"),
 		Error:        lipgloss.Color("#c92a2a"),
-		Success:      lipgloss.Color("#2b8a3e"),
+		Success:      lipgloss.Color("#247434"),
 		Warning:      lipgloss.Color("#b03800"),
 		Border:       lipgloss.Color("#ced4da"),
 		GlamourStyle: "light",

@@ -32,16 +32,23 @@ func NewLocal(cfg Config) Session {
 	if cfg.Tools == nil {
 		cfg.Tools = tools.NewRegistry()
 	}
+	id := cfg.ID
+	if id == "" {
+		id = fmt.Sprintf("s_%d", time.Now().UnixNano())
+	}
 	return &local{
+		id:      id,
 		cfg:     cfg,
 		events:  make(chan Event, 256),
 		closed:  make(chan struct{}),
 		pending: map[string]chan Decision{},
 		always:  map[string]bool{},
+		history: cfg.History,
 	}
 }
 
 type local struct {
+	id     string
 	cfg    Config
 	events chan Event
 	closed chan struct{}
@@ -51,15 +58,19 @@ type local struct {
 	mu         sync.Mutex // guards the fields below
 	mutatingMu sync.Mutex // ensures bash, edit_file, write_file never run concurrently
 	running    bool
-	isClosed  bool
-	cancel    context.CancelFunc
-	pending   map[string]chan Decision
-	always    map[string]bool
-	usage     UsageUpdatedPayload
-	closeOnce sync.Once
+	isClosed   bool
+	cancel     context.CancelFunc
+	pending    map[string]chan Decision
+	always     map[string]bool
+	usage      UsageUpdatedPayload
+	closeOnce  sync.Once
 
 	history []llm.Message // only touched by the single running turn
+
+	checkpointTakenInTurn bool
 }
+
+func (s *local) ID() string { return s.id }
 
 func (s *local) Events() <-chan Event { return s.events }
 
@@ -108,6 +119,16 @@ func (s *local) SetMode(m permission.Mode) {
 	s.cfg.Policy.Mode = m
 }
 
+func (s *local) Checkpointer() Checkpointer {
+	return s.cfg.Checkpointer
+}
+
+func (s *local) SetProvider(p llm.Provider) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cfg.Provider = p
+}
+
 func (s *local) Close() {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
@@ -145,6 +166,9 @@ func (s *local) emit(ev Event) {
 
 func (s *local) runTurn(ctx context.Context, cancel context.CancelFunc, prompt string) {
 	defer s.wg.Done()
+	s.mu.Lock()
+	s.checkpointTakenInTurn = false
+	s.mu.Unlock()
 	final := s.loop(ctx, prompt)
 	cancel()
 	// Mark idle BEFORE the terminal event so a frontend can Send as soon as it sees it.
@@ -364,6 +388,28 @@ func (s *local) runToolCall(ctx context.Context, c llm.ToolCall) llm.Message {
 	if isMutatingTool(c.Name) {
 		s.mutatingMu.Lock()
 		defer s.mutatingMu.Unlock()
+
+		if s.cfg.Checkpointer != nil {
+			s.mu.Lock()
+			needCheckpoint := !s.checkpointTakenInTurn
+			if needCheckpoint {
+				s.checkpointTakenInTurn = true
+			}
+			s.mu.Unlock()
+
+			if needCheckpoint {
+				info, err := s.cfg.Checkpointer.Create(ctx, fmt.Sprintf("Before %s in turn", c.Name))
+				if err == nil {
+					s.emit(Event{
+						Type: EventCheckpointCreated,
+						Checkpt: &CheckpointCreatedPayload{
+							ID:    info.ID,
+							Files: info.SkippedFiles,
+						},
+					})
+				}
+			}
+		}
 	}
 
 	start := time.Now()
@@ -418,6 +464,7 @@ func (s *local) awaitApproval(ctx context.Context, id, name, input string, req t
 			Cwd:            req.Cwd,
 			TimeoutSeconds: req.TimeoutSeconds,
 			IsDangerous:    req.IsDangerous,
+			IsProtected:    req.IsProtected,
 		},
 	})
 

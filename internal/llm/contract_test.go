@@ -30,12 +30,6 @@ type ProviderWireFixtures interface {
 	CreateProvider(serverURL string) (llm.Provider, error)
 }
 
-func escapeJSONString(s string) string {
-	b, _ := json.Marshal(s)
-	// Remove outer quotes
-	return string(b[1 : len(b)-1])
-}
-
 // -------------------------------------------------------------
 // Anthropic Fixtures
 // -------------------------------------------------------------
@@ -254,7 +248,7 @@ func runContractSuite(t *testing.T, fix ProviderWireFixtures) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.WriteHeader(http.StatusOK)
 			for _, chunk := range fix.TextStream() {
-				fmt.Fprint(w, chunk)
+				_, _ = fmt.Fprint(w, chunk)
 				if f, ok := w.(http.Flusher); ok {
 					f.Flush()
 				}
@@ -289,7 +283,7 @@ func runContractSuite(t *testing.T, fix ProviderWireFixtures) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.WriteHeader(http.StatusOK)
 			for _, chunk := range fix.SingleToolCall("read_file", `{"path":"main.go"}`) {
-				fmt.Fprint(w, chunk)
+				_, _ = fmt.Fprint(w, chunk)
 				if f, ok := w.(http.Flusher); ok {
 					f.Flush()
 				}
@@ -334,7 +328,7 @@ func runContractSuite(t *testing.T, fix ProviderWireFixtures) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.WriteHeader(http.StatusOK)
 			for _, chunk := range fix.MultipleToolCalls("list_dir", `{"path":"."}`, "read_file", `{"path":"go.mod"}`) {
-				fmt.Fprint(w, chunk)
+				_, _ = fmt.Fprint(w, chunk)
 				if f, ok := w.(http.Flusher); ok {
 					f.Flush()
 				}
@@ -372,7 +366,7 @@ func runContractSuite(t *testing.T, fix ProviderWireFixtures) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.WriteHeader(http.StatusOK)
 			for _, chunk := range fix.SplitToolCallChunks("read_file", `{"path":`, `"main.go"}`) {
-				fmt.Fprint(w, chunk)
+				_, _ = fmt.Fprint(w, chunk)
 				if f, ok := w.(http.Flusher); ok {
 					f.Flush()
 				}
@@ -414,7 +408,7 @@ func runContractSuite(t *testing.T, fix ProviderWireFixtures) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.WriteHeader(http.StatusOK)
 			for _, chunk := range fix.UsageStream(120, 45) {
-				fmt.Fprint(w, chunk)
+				_, _ = fmt.Fprint(w, chunk)
 				if f, ok := w.(http.Flusher); ok {
 					f.Flush()
 				}
@@ -452,7 +446,7 @@ func runContractSuite(t *testing.T, fix ProviderWireFixtures) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.WriteHeader(http.StatusOK)
 			for _, chunk := range fix.MidStreamError() {
-				fmt.Fprint(w, chunk)
+				_, _ = fmt.Fprint(w, chunk)
 				if f, ok := w.(http.Flusher); ok {
 					f.Flush()
 				}
@@ -488,13 +482,13 @@ func runContractSuite(t *testing.T, fix ProviderWireFixtures) {
 			att := attempts.Add(1)
 			if att == 1 {
 				w.WriteHeader(http.StatusTooManyRequests)
-				fmt.Fprint(w, fix.RateLimit429Body())
+				_, _ = fmt.Fprint(w, fix.RateLimit429Body())
 				return
 			}
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.WriteHeader(http.StatusOK)
 			for _, chunk := range fix.TextStream() {
-				fmt.Fprint(w, chunk)
+				_, _ = fmt.Fprint(w, chunk)
 			}
 		}))
 		defer ts.Close()
@@ -529,7 +523,7 @@ func runContractSuite(t *testing.T, fix ProviderWireFixtures) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			attempts.Add(1)
 			w.WriteHeader(http.StatusUnauthorized)
-			fmt.Fprint(w, fix.Unauthorized401Body())
+			_, _ = fmt.Fprint(w, fix.Unauthorized401Body())
 		}))
 		defer ts.Close()
 
@@ -564,7 +558,7 @@ func runContractSuite(t *testing.T, fix ProviderWireFixtures) {
 			w.WriteHeader(http.StatusOK)
 			for i := 0; i < 50; i++ {
 				for _, chunk := range fix.TextStream() {
-					fmt.Fprint(w, chunk)
+					_, _ = fmt.Fprint(w, chunk)
 					if f, ok := w.(http.Flusher); ok {
 						f.Flush()
 					}
@@ -604,7 +598,7 @@ func runContractSuite(t *testing.T, fix ProviderWireFixtures) {
 	t.Run(fix.Name()+"/CancelDuringBackoff", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusTooManyRequests)
-			fmt.Fprint(w, fix.RateLimit429Body())
+			_, _ = fmt.Fprint(w, fix.RateLimit429Body())
 		}))
 		defer ts.Close()
 
@@ -649,4 +643,3 @@ func TestProviderContract_OpenAI(t *testing.T) {
 func TestProviderContract_Gemini(t *testing.T) {
 	runContractSuite(t, GeminiFixtures{})
 }
-

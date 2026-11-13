@@ -80,4 +80,3 @@ func TestMockProviderHonorsCancel(t *testing.T) {
 		t.Fatal("channel stream did not terminate after context cancel")
 	}
 }
-

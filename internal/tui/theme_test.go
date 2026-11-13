@@ -1,6 +1,7 @@
 package tui_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/ayushpatil0810/forge/internal/tui"
+	"github.com/ayushpatil0810/forge/themes"
 )
 
 // parseHexColor parses a #rrggbb string into sRGB components (0.0 to 1.0).
@@ -74,23 +76,82 @@ func TestThemeContrastRatio(t *testing.T) {
 			}
 
 			bg := string(th.Background)
-			fg := string(th.Foreground)
-			pri := string(th.Primary)
+			tokens := map[string]string{
+				"foreground": string(th.Foreground),
+				"primary":    string(th.Primary),
+				"secondary":  string(th.Secondary),
+				"accent":     string(th.Accent),
+				"muted":      string(th.Muted),
+				"error":      string(th.Error),   // diff del
+				"success":    string(th.Success), // diff add
+				"warning":    string(th.Warning),
+			}
 
-			fgRatio, err := contrastRatio(fg, bg)
-			if err != nil {
-				t.Fatalf("contrast calculation failed for fg: %v", err)
+			for tokenName, hex := range tokens {
+				ratio, err := contrastRatio(hex, bg)
+				if err != nil {
+					t.Fatalf("contrast calculation failed for %s (%s): %v", tokenName, hex, err)
+				}
+				if ratio < 4.5 {
+					t.Errorf("theme %q %s contrast ratio %.2f:1 < 4.5:1 against background %s (color: %s)", name, tokenName, ratio, bg, hex)
+				}
 			}
-			if fgRatio < 4.5 {
-				t.Errorf("theme %q foreground contrast ratio %.2f:1 < 4.5:1 against background %s", name, fgRatio, bg)
+		})
+	}
+}
+
+func TestThemeRequiredTokens(t *testing.T) {
+	entries, err := themes.FS.ReadDir(".")
+	if err != nil {
+		t.Fatalf("failed to read embedded themes dir: %v", err)
+	}
+
+	requiredTokens := []string{
+		"name",
+		"is_dark",
+		"background",
+		"foreground",
+		"primary",
+		"secondary",
+		"accent",
+		"muted",
+		"error",
+		"success",
+		"warning",
+		"border",
+		"glamour_style",
+	}
+
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		t.Run(entry.Name(), func(t *testing.T) {
+			data, err := themes.FS.ReadFile(entry.Name())
+			if err != nil {
+				t.Fatalf("failed to read %s: %v", entry.Name(), err)
+			}
+			var m map[string]interface{}
+			if err := json.Unmarshal(data, &m); err != nil {
+				t.Fatalf("failed to unmarshal %s: %v", entry.Name(), err)
 			}
 
-			priRatio, err := contrastRatio(pri, bg)
-			if err != nil {
-				t.Fatalf("contrast calculation failed for primary: %v", err)
-			}
-			if priRatio < 4.5 {
-				t.Errorf("theme %q primary contrast ratio %.2f:1 < 4.5:1 against background %s", name, priRatio, bg)
+			for _, token := range requiredTokens {
+				val, exists := m[token]
+				if !exists {
+					t.Errorf("theme %s is missing required token %q", entry.Name(), token)
+					continue
+				}
+				if token == "is_dark" {
+					if _, ok := val.(bool); !ok {
+						t.Errorf("theme %s token %q expected bool, got %T (%v)", entry.Name(), token, val, val)
+					}
+				} else {
+					strVal, ok := val.(string)
+					if !ok || strings.TrimSpace(strVal) == "" {
+						t.Errorf("theme %s token %q must be non-empty string, got %T (%v)", entry.Name(), token, val, val)
+					}
+				}
 			}
 		})
 	}

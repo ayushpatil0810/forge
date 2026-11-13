@@ -29,4 +29,3 @@ func TestGenerateDiff(t *testing.T) {
 		t.Fatalf("expected new file diff to contain +first line, got:\n%s", newFileDiff)
 	}
 }
-

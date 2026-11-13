@@ -1,0 +1,22 @@
+ ✕ ERROR [auth_failed]                                                          
+ Invalid or missing API key for openai                                          
+                                                                                
+ [i] How to fix: Set OPENAI_API_KEY environment variable. See                   
+ docs/configuration.md.                                                         
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+[] [openai/gpt-4o] git:main · Error · tokens: 0 in / 0 out
+❯ Ask Forge a question or describe a change... (Enter to send, Alt+Enter for  
+❯ newline)                                                                    
+❯                                                                             
+Enter: send · Alt+Enter: newline · Tab: mode · Esc: cancel · Ctrl+O: expand ·...

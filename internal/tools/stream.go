@@ -22,4 +22,3 @@ func StreamFromContext(ctx context.Context) StreamFunc {
 	}
 	return func(string) {}
 }
-

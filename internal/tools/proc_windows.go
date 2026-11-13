@@ -46,7 +46,7 @@ func (pg *ProcessGroup) Attach(cmd *exec.Cmd) error {
 	if err != nil {
 		return err
 	}
-	defer windows.CloseHandle(h)
+	defer func() { _ = windows.CloseHandle(h) }()
 	return windows.AssignProcessToJobObject(pg.job, h)
 }
 
@@ -61,4 +61,3 @@ func (pg *ProcessGroup) Kill(cmd *exec.Cmd) {
 		_ = cmd.Process.Kill()
 	}
 }
-

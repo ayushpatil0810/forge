@@ -9,18 +9,37 @@ import (
 	"strings"
 )
 
+// ProviderProfile represents a named provider configuration in user config.
+type ProviderProfile struct {
+	Name         string `json:"name"`
+	Kind         string `json:"kind"`
+	BaseURL      string `json:"base_url,omitempty"`
+	DefaultModel string `json:"default_model,omitempty"`
+}
+
+// SessionsConfig controls session persistence and retention settings.
+type SessionsConfig struct {
+	Enabled       *bool  `json:"enabled,omitempty"`
+	RetentionDays int    `json:"retention_days,omitempty"`
+	DatabasePath  string `json:"database_path,omitempty"`
+}
+
 // Config holds agent configuration parameters across layers.
 type Config struct {
-	Provider       string   `json:"provider,omitempty"`
-	Model          string   `json:"model,omitempty"`
-	MaxTurns       int      `json:"max_turns,omitempty"`
-	MaxTokens      int      `json:"max_tokens,omitempty"`
-	PermissionMode string   `json:"permission_mode,omitempty"`
-	WorkspaceRoot  string   `json:"workspace_root,omitempty"`
-	Theme          string   `json:"theme,omitempty"`
-	SystemPrompt   string   `json:"system_prompt,omitempty"`
-	Shell          string   `json:"shell,omitempty"`
-	Warnings       []string `json:"-"`
+	Provider           string            `json:"provider,omitempty"`
+	Model              string            `json:"model,omitempty"`
+	BaseURL            string            `json:"base_url,omitempty"`
+	MaxTurns           int               `json:"max_turns,omitempty"`
+	MaxTokens          int               `json:"max_tokens,omitempty"`
+	PermissionMode     string            `json:"permission_mode,omitempty"`
+	WorkspaceRoot      string            `json:"workspace_root,omitempty"`
+	Theme              string            `json:"theme,omitempty"`
+	SystemPrompt       string            `json:"system_prompt,omitempty"`
+	Shell              string            `json:"shell,omitempty"`
+	Sessions           *SessionsConfig   `json:"sessions,omitempty"`
+	Providers          []ProviderProfile `json:"providers,omitempty"`
+	IgnoredProjectKeys map[string]string `json:"ignored_project_keys,omitempty"`
+	Warnings           []string          `json:"-"`
 }
 
 // Redacted returns a copy of Config suitable for logging or display with warnings detached.
@@ -34,8 +53,8 @@ func (c Config) Redacted() Config {
 func (c Config) Validate() error {
 	if c.Provider != "" {
 		p := strings.ToLower(c.Provider)
-		if p != "anthropic" && p != "openai" && p != "gemini" && p != "mock" {
-			return fmt.Errorf("unknown provider %q (expected anthropic, openai, gemini, or mock)", c.Provider)
+		if p != "anthropic" && p != "openai" && p != "gemini" && p != "mock" && p != "ollama" && p != "lmstudio" {
+			return fmt.Errorf("unknown provider %q (expected anthropic, openai, gemini, ollama, lmstudio, or mock)", c.Provider)
 		}
 	}
 	if c.PermissionMode != "" {
@@ -53,6 +72,25 @@ func (c Config) Validate() error {
 	return nil
 }
 
+// CheckInsecureBaseURL inspects custom base URLs and returns a visible warning if
+// API keys are being transmitted in cleartext over insecure HTTP to non-loopback hosts.
+func CheckInsecureBaseURL(baseURL string) string {
+	raw := strings.TrimSpace(baseURL)
+	if strings.HasPrefix(strings.ToLower(raw), "http://") {
+		host := strings.TrimPrefix(strings.ToLower(raw), "http://")
+		if slashIdx := strings.Index(host, "/"); slashIdx != -1 {
+			host = host[:slashIdx]
+		}
+		if colonIdx := strings.Index(host, ":"); colonIdx != -1 {
+			host = host[:colonIdx]
+		}
+		if host != "localhost" && host != "127.0.0.1" && host != "::1" && host != "[::1]" {
+			return fmt.Sprintf("SEC-6: Custom base_url %q transmits API keys in cleartext over insecure HTTP. Use HTTPS or tunnel over a secure connection.", baseURL)
+		}
+	}
+	return ""
+}
+
 // LoadOptions represents caller/CLI overrides and path overrides.
 type LoadOptions struct {
 	UserConfigFile    string
@@ -60,6 +98,7 @@ type LoadOptions struct {
 	WorkspaceRoot     string
 	Provider          string
 	Model             string
+	BaseURL           string
 	PermissionMode    string
 	MaxTurns          int
 	MaxTokens         int
@@ -75,6 +114,10 @@ func DefaultModelForProvider(p string) string {
 		return "gpt-4o"
 	case "gemini":
 		return "gemini-2.5-pro"
+	case "ollama":
+		return "llama3.3"
+	case "lmstudio":
+		return "model"
 	case "mock":
 		return "mock-model"
 	default:
@@ -128,16 +171,13 @@ func Load(opts LoadOptions) (Config, error) {
 	}
 	cfg.WorkspaceRoot = wsRoot
 
-	// 2. Project config
+	// 2. Project config (untrusted repository configuration - strict allowlist enforced)
 	projectPath := opts.ProjectConfigFile
 	if projectPath == "" && wsRoot != "" {
 		projectPath = filepath.Join(wsRoot, ".forge", "config.json")
 	}
 	if projectPath != "" {
-		if secWarnings := checkProjectSecurity(projectPath); len(secWarnings) > 0 {
-			cfg.Warnings = append(cfg.Warnings, secWarnings...)
-		}
-		if err := mergeFile(&cfg, projectPath); err != nil && !os.IsNotExist(err) {
+		if err := mergeProjectFile(&cfg, projectPath); err != nil && !os.IsNotExist(err) {
 			return cfg, fmt.Errorf("reading project config %q: %w", projectPath, err)
 		}
 	}
@@ -148,6 +188,33 @@ func Load(opts LoadOptions) (Config, error) {
 	// 4. Flag/Options overrides
 	applyOptions(&cfg, opts)
 
+	// Preset auto-fill for local providers when base_url is not set
+	if strings.ToLower(cfg.Provider) == "ollama" && cfg.BaseURL == "" {
+		cfg.BaseURL = "http://127.0.0.1:11434"
+	}
+	if strings.ToLower(cfg.Provider) == "lmstudio" && cfg.BaseURL == "" {
+		cfg.BaseURL = "http://127.0.0.1:1234/v1"
+	}
+
+	// Match named provider profile if provider matches a profile name
+	for _, p := range cfg.Providers {
+		if strings.EqualFold(p.Name, cfg.Provider) {
+			cfg.Provider = p.Kind
+			if cfg.BaseURL == "" && p.BaseURL != "" {
+				cfg.BaseURL = p.BaseURL
+			}
+			if opts.Model == "" && p.DefaultModel != "" {
+				cfg.Model = p.DefaultModel
+			}
+			break
+		}
+	}
+
+	// Check for cleartext API key transmission over non-loopback HTTP
+	if warn := CheckInsecureBaseURL(cfg.BaseURL); warn != "" {
+		cfg.Warnings = append(cfg.Warnings, warn)
+	}
+
 	if err := cfg.Validate(); err != nil {
 		return cfg, fmt.Errorf("invalid config: %w", err)
 	}
@@ -155,26 +222,86 @@ func Load(opts LoadOptions) (Config, error) {
 	return cfg, nil
 }
 
-func checkProjectSecurity(path string) []string {
+func mergeProjectFile(dst *Config, path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil
+		return err
 	}
 	var raw map[string]any
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil
+		return fmt.Errorf("parsing json: %w", err)
 	}
 
-	var warnings []string
+	if dst.IgnoredProjectKeys == nil {
+		dst.IgnoredProjectKeys = make(map[string]string)
+	}
+
 	for k, v := range raw {
-		kUpper := strings.ToUpper(k)
-		if strings.Contains(kUpper, "API_KEY") || strings.Contains(kUpper, "TOKEN") || strings.Contains(kUpper, "SECRET") {
-			if strVal, ok := v.(string); ok && strings.TrimSpace(strVal) != "" {
-				warnings = append(warnings, fmt.Sprintf("SEC-6: Potential credential %q found in project configuration file %q. Never commit API keys or secrets to project repositories; use environment variables instead.", k, path))
+		kLower := strings.ToLower(k)
+		switch kLower {
+		case "model":
+			if s, ok := v.(string); ok && s != "" {
+				dst.Model = s
+			}
+		case "theme":
+			if s, ok := v.(string); ok && s != "" {
+				dst.Theme = s
+			}
+		case "max_turns":
+			if f, ok := v.(float64); ok && int(f) > 0 {
+				dst.MaxTurns = int(f)
+			}
+		case "max_tokens":
+			if f, ok := v.(float64); ok && int(f) > 0 {
+				dst.MaxTokens = int(f)
+			}
+		case "system_prompt":
+			if s, ok := v.(string); ok && s != "" {
+				dst.SystemPrompt = s
+			}
+		case "checkpoints":
+			// Allowed project configuration
+		case "permission_mode":
+			if s, ok := v.(string); ok {
+				modeLower := strings.ToLower(strings.TrimSpace(s))
+				if modeLower == "ask" || modeLower == "accept-edits" || modeLower == "plan" {
+					dst.PermissionMode = modeLower
+				} else {
+					reason := fmt.Sprintf("value %q not permitted; project config may only set 'ask', 'accept-edits', or 'plan' (never 'yolo')", s)
+					dst.IgnoredProjectKeys["permission_mode"] = reason
+					dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Project configuration in %q attempted to set permission_mode to %q; %s", path, s, reason))
+				}
+			}
+		case "shell":
+			reason := "arbitrary code execution risk; shell can only be configured in user config or CLI flags"
+			dst.IgnoredProjectKeys["shell"] = reason
+			dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Forbidden key %q in project config %q ignored (%s)", k, path, reason))
+		case "base_url":
+			reason := "credential exfiltration and SSRF risk; base_url can only be configured in user config or CLI flags"
+			dst.IgnoredProjectKeys["base_url"] = reason
+			dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Forbidden key %q in project config %q ignored (%s)", k, path, reason))
+		case "yolo":
+			reason := "cannot disable safety prompts via repository files"
+			dst.IgnoredProjectKeys["yolo"] = reason
+			dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Forbidden key %q in project config %q ignored (%s)", k, path, reason))
+		case "sessions", "session":
+			reason := "session database path and persistence settings can only be configured in user config or CLI flags"
+			dst.IgnoredProjectKeys[k] = reason
+			dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Forbidden key %q in project config %q ignored (%s)", k, path, reason))
+		default:
+			kUpper := strings.ToUpper(k)
+			if strings.Contains(kUpper, "API_KEY") || strings.Contains(kUpper, "TOKEN") || strings.Contains(kUpper, "SECRET") {
+				reason := "credentials in repository configuration are prohibited"
+				dst.IgnoredProjectKeys[k] = reason
+				dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Potential credential key %q in project config %q ignored (%s)", k, path, reason))
+			} else {
+				reason := "key not permitted in project configuration allowlist"
+				dst.IgnoredProjectKeys[k] = reason
+				dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Disallowed key %q in project config %q ignored (%s)", k, path, reason))
 			}
 		}
 	}
-	return warnings
+	return nil
 }
 
 func mergeFile(dst *Config, path string) error {
@@ -201,6 +328,9 @@ func merge(dst *Config, src Config) {
 	if src.Model != "" {
 		dst.Model = src.Model
 	}
+	if src.BaseURL != "" {
+		dst.BaseURL = src.BaseURL
+	}
 	if src.MaxTurns > 0 {
 		dst.MaxTurns = src.MaxTurns
 	}
@@ -221,6 +351,9 @@ func merge(dst *Config, src Config) {
 	}
 	if src.Shell != "" {
 		dst.Shell = src.Shell
+	}
+	if len(src.Providers) > 0 {
+		dst.Providers = append(dst.Providers, src.Providers...)
 	}
 }
 
@@ -260,6 +393,11 @@ func applyEnv(dst *Config) {
 	if v := os.Getenv("FORGE_SHELL"); v != "" {
 		dst.Shell = v
 	}
+	if v := os.Getenv("FORGE_BASE_URL"); v != "" {
+		dst.BaseURL = v
+	} else if v := os.Getenv("OPENAI_BASE_URL"); v != "" {
+		dst.BaseURL = v
+	}
 }
 
 func applyOptions(dst *Config, opts LoadOptions) {
@@ -272,6 +410,9 @@ func applyOptions(dst *Config, opts LoadOptions) {
 	}
 	if opts.Model != "" {
 		dst.Model = opts.Model
+	}
+	if opts.BaseURL != "" {
+		dst.BaseURL = opts.BaseURL
 	}
 	if opts.MaxTurns > 0 {
 		dst.MaxTurns = opts.MaxTurns

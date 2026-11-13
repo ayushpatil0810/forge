@@ -47,4 +47,3 @@ func NewProvider(cfg ProviderConfig) (Provider, error) {
 
 	return factory(cfg)
 }
-

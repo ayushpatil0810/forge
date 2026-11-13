@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/ayushpatil0810/forge/internal/agent"
@@ -86,24 +87,50 @@ func (tc *ToolCard) Render(width int, expanded bool, styles Styles) string {
 	var icon string
 	var statusSuffix string
 
+	dumb := os.Getenv("TERM") == "dumb" || os.Getenv("NO_COLOR") != ""
+
 	switch tc.Status {
 	case agent.ToolRunning:
-		icon = styles.ToolCardRunning.Render("⟳")
+		if dumb {
+			icon = styles.ToolCardRunning.Render("*")
+		} else {
+			icon = styles.ToolCardRunning.Render("⟳")
+		}
 		statusSuffix = styles.SystemInfo.Render("(running...)")
 	case agent.ToolOK:
-		icon = styles.ToolCardSuccess.Render("✔")
+		if dumb {
+			icon = styles.ToolCardSuccess.Render("+")
+		} else {
+			icon = styles.ToolCardSuccess.Render("✔")
+		}
 		statusSuffix = styles.SystemInfo.Render(fmt.Sprintf("(%dms)", tc.DurationMs))
 	case agent.ToolError:
-		icon = styles.ToolCardError.Render("✖")
+		if dumb {
+			icon = styles.ToolCardError.Render("x")
+		} else {
+			icon = styles.ToolCardError.Render("✖")
+		}
 		statusSuffix = styles.ToolCardError.Render(fmt.Sprintf("(failed, %dms)", tc.DurationMs))
 	case agent.ToolDenied:
-		icon = styles.ToolCardError.Render("⊘")
+		if dumb {
+			icon = styles.ToolCardError.Render("-")
+		} else {
+			icon = styles.ToolCardError.Render("⊘")
+		}
 		statusSuffix = styles.ToolCardError.Render("(denied)")
 	case agent.ToolCancelled:
-		icon = styles.SystemInfo.Render("⊘")
+		if dumb {
+			icon = styles.SystemInfo.Render("-")
+		} else {
+			icon = styles.SystemInfo.Render("⊘")
+		}
 		statusSuffix = styles.SystemInfo.Render("(cancelled)")
 	default:
-		icon = "•"
+		if dumb {
+			icon = "*"
+		} else {
+			icon = "•"
+		}
 	}
 
 	header := fmt.Sprintf("%s %s %s %s", icon, styles.AssistantText.Bold(true).Render(tc.Name), tc.Summary, statusSuffix)
@@ -159,4 +186,3 @@ func (tc *ToolCard) Render(width int, expanded bool, styles Styles) string {
 	cardBox := styles.BorderBox.Width(width - 4).Render(strings.TrimRight(content.String(), "\n"))
 	return cardBox
 }
-

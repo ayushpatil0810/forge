@@ -43,4 +43,3 @@ func TestSanitizeSchema(t *testing.T) {
 		t.Errorf("cleaned schema lost valid properties: %s", cleanedStr)
 	}
 }
-

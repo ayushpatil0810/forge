@@ -100,7 +100,7 @@ func New(cfg Config) (*Provider, error) {
 		apiKey = os.Getenv("ANTHROPIC_API_KEY")
 	}
 	if strings.TrimSpace(apiKey) == "" {
-		return nil, errors.New("anthropic: ANTHROPIC_API_KEY environment variable is required; please set it or specify --api-key")
+		return nil, errors.New("anthropic: ANTHROPIC_API_KEY environment variable is required; please set it or run 'forge auth login anthropic'")
 	}
 
 	model := cfg.Model
@@ -284,7 +284,7 @@ func (p *Provider) streamWithRetry(ctx context.Context, bodyBytes []byte, ch cha
 			return res, false, 0, nil
 		}
 
-		defer res.Body.Close()
+		defer func() { _ = res.Body.Close() }()
 		respBody, _ := io.ReadAll(res.Body)
 
 		isRetryable := retry.IsRetryableStatus(res.StatusCode)
@@ -314,7 +314,7 @@ func (p *Provider) streamWithRetry(ctx context.Context, bodyBytes []byte, ch cha
 		return
 	}
 
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	// Response received; process streaming body.
 	// Once streaming begins, retries are no longer attempted (A-8).
 	err = p.parseSSEStream(ctx, resp.Body, ch)

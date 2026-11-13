@@ -123,7 +123,7 @@ func TestModeByToolMatrix(t *testing.T) {
 		permission.ModeYOLO: {
 			"read_tool":              permission.Allow,
 			"edit_file_normal":       permission.Allow,
-			"edit_file_protected":    permission.Allow,
+			"edit_file_protected":    permission.Ask, // Protected paths ask even in YOLO (P-6)
 			"write_file_normal":      permission.Allow,
 			"bash_normal":            permission.Allow,
 			"bash_flagged_dangerous": permission.Ask, // Dangerous commands ask even in YOLO!
@@ -151,3 +151,82 @@ func TestModeByToolMatrix(t *testing.T) {
 	}
 }
 
+func TestProtectedPathsByModeTable(t *testing.T) {
+	pathClasses := []struct {
+		name        string
+		path        string
+		isProtected bool
+	}{
+		{name: "normal_code", path: "src/main.go", isProtected: false},
+		{name: "normal_doc", path: "docs/readme.txt", isProtected: false},
+		{name: "git_dir", path: ".git/config", isProtected: true},
+		{name: "git_subpath", path: "sub/.git/HEAD", isProtected: true},
+		{name: "env_exact", path: ".env", isProtected: true},
+		{name: "env_local", path: ".env.local", isProtected: true},
+		{name: "env_prod", path: ".env.production", isProtected: true},
+		{name: "ssh_key", path: ".ssh/id_rsa", isProtected: true},
+		{name: "ssh_config", path: ".ssh/config", isProtected: true},
+		{name: "aws_credentials", path: ".aws/credentials", isProtected: true},
+		{name: "aws_config", path: ".aws/config", isProtected: true},
+		{name: "pem_cert", path: "certs/server.pem", isProtected: true},
+		{name: "tls_key", path: "certs/private.key", isProtected: true},
+	}
+
+	modes := []permission.Mode{
+		permission.ModeDefault,
+		permission.ModeAcceptEdits,
+		permission.ModeYOLO,
+		permission.ModePlan,
+	}
+
+	for _, pc := range pathClasses {
+		// First verify IsProtectedPath classifier
+		if got := tools.IsProtectedPath(pc.path); got != pc.isProtected {
+			t.Errorf("IsProtectedPath(%q) = %v; want %v", pc.path, got, pc.isProtected)
+		}
+
+		for _, mode := range modes {
+			t.Run(string(mode)+"_"+pc.name, func(t *testing.T) {
+				policy := permission.Policy{Mode: mode}
+				req := tools.ApprovalRequest{
+					Description: "Edit " + pc.path,
+					Diff:        "-old\n+new\n",
+					IsProtected: tools.IsProtectedPath(pc.path),
+				}
+
+				verdict := policy.Check("edit_file", req)
+
+				switch mode {
+				case permission.ModePlan:
+					if verdict != permission.Deny {
+						t.Errorf("ModePlan for %s must be Deny, got %v", pc.path, verdict)
+					}
+				case permission.ModeDefault:
+					if verdict != permission.Ask {
+						t.Errorf("ModeDefault for %s must be Ask, got %v", pc.path, verdict)
+					}
+				case permission.ModeAcceptEdits:
+					if pc.isProtected {
+						if verdict != permission.Ask {
+							t.Errorf("ModeAcceptEdits for protected %s must be Ask, got %v", pc.path, verdict)
+						}
+					} else {
+						if verdict != permission.Allow {
+							t.Errorf("ModeAcceptEdits for non-protected %s must be Allow, got %v", pc.path, verdict)
+						}
+					}
+				case permission.ModeYOLO:
+					if pc.isProtected {
+						if verdict != permission.Ask {
+							t.Errorf("ModeYOLO for protected %s must be Ask, got %v", pc.path, verdict)
+						}
+					} else {
+						if verdict != permission.Allow {
+							t.Errorf("ModeYOLO for non-protected %s must be Allow, got %v", pc.path, verdict)
+						}
+					}
+				}
+			})
+		}
+	}
+}

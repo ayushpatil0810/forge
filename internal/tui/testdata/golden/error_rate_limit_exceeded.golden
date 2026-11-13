@@ -1,0 +1,22 @@
+ ✕ ERROR [rate_limit_exceeded]                                                  
+ HTTP 429: Requests per minute limit exceeded                                   
+                                                                                
+ [i] How to fix: Provider rate limit reached. Forge automatically retries       
+ with exponential backoff.                                                      
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+[] [openai/gpt-4o] git:main · Error · tokens: 0 in / 0 out
+❯ Ask Forge a question or describe a change... (Enter to send, Alt+Enter for  
+❯ newline)                                                                    
+❯                                                                             
+Enter: send · Alt+Enter: newline · Tab: mode · Esc: cancel · Ctrl+O: expand ·...

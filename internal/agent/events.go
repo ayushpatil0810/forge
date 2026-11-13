@@ -68,6 +68,7 @@ type ApprovalRequestedPayload struct {
 	Cwd            string `json:"cwd,omitempty"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 	IsDangerous    bool   `json:"is_dangerous,omitempty"`
+	IsProtected    bool   `json:"is_protected,omitempty"`
 }
 
 type CheckpointCreatedPayload struct {
@@ -101,19 +102,19 @@ type DonePayload struct {
 
 // Event is the single, flat, JSON-friendly envelope frontends consume (SPEC §6.4).
 type Event struct {
-	Seq       int64                  `json:"seq"`
-	Type      EventType              `json:"type"`
-	Token     *TokenDeltaPayload     `json:"token,omitempty"`
-	Thinking  *ThinkingDeltaPayload  `json:"thinking,omitempty"`
-	ToolStart *ToolStartedPayload    `json:"toolStart,omitempty"`
-	ToolOut   *ToolOutputDeltaPayload `json:"toolOut,omitempty"`
-	ToolDone  *ToolFinishedPayload   `json:"toolDone,omitempty"`
+	Seq       int64                     `json:"seq"`
+	Type      EventType                 `json:"type"`
+	Token     *TokenDeltaPayload        `json:"token,omitempty"`
+	Thinking  *ThinkingDeltaPayload     `json:"thinking,omitempty"`
+	ToolStart *ToolStartedPayload       `json:"toolStart,omitempty"`
+	ToolOut   *ToolOutputDeltaPayload   `json:"toolOut,omitempty"`
+	ToolDone  *ToolFinishedPayload      `json:"toolDone,omitempty"`
 	Approval  *ApprovalRequestedPayload `json:"approval,omitempty"`
 	Checkpt   *CheckpointCreatedPayload `json:"checkpt,omitempty"`
-	Usage     *UsageUpdatedPayload   `json:"usage,omitempty"`
-	Retry     *RetryScheduledPayload `json:"retry,omitempty"`
-	Err       *ErrorPayload          `json:"err,omitempty"`
-	Done      *DonePayload           `json:"done,omitempty"`
+	Usage     *UsageUpdatedPayload      `json:"usage,omitempty"`
+	Retry     *RetryScheduledPayload    `json:"retry,omitempty"`
+	Err       *ErrorPayload             `json:"err,omitempty"`
+	Done      *DonePayload              `json:"done,omitempty"`
 }
 
 func (e Event) Terminal() bool {

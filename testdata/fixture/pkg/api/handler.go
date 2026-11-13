@@ -7,4 +7,3 @@ func HandleRequest() {
 	s := storage.Store{}
 	_ = s
 }
-

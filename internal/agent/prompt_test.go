@@ -27,7 +27,7 @@ func TestBuildSystemPromptBase(t *testing.T) {
 func TestBuildSystemPromptWithAgentsMD(t *testing.T) {
 	dir := t.TempDir()
 	content := "Run tests with go test ./..."
-	os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte(content), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte(content), 0o644)
 
 	prompt := agent.BuildSystemPrompt(dir)
 	if !strings.Contains(prompt, "Project Instructions (from AGENTS.md)") {
@@ -41,7 +41,7 @@ func TestBuildSystemPromptWithAgentsMD(t *testing.T) {
 func TestBuildSystemPromptFallbackToClaudeMD(t *testing.T) {
 	dir := t.TempDir()
 	content := "Claude specific guidelines"
-	os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(content), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(content), 0o644)
 
 	prompt := agent.BuildSystemPrompt(dir)
 	if !strings.Contains(prompt, "Project Instructions (from CLAUDE.md)") {
@@ -54,8 +54,8 @@ func TestBuildSystemPromptFallbackToClaudeMD(t *testing.T) {
 
 func TestBuildSystemPromptPrefersAgentsOverClaude(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("use agents.md"), 0o644)
-	os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("use claude.md"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("use agents.md"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("use claude.md"), 0o644)
 
 	prompt := agent.BuildSystemPrompt(dir)
 	if !strings.Contains(prompt, "use agents.md") {
@@ -65,4 +65,3 @@ func TestBuildSystemPromptPrefersAgentsOverClaude(t *testing.T) {
 		t.Errorf("did not expect CLAUDE.md when AGENTS.md is present")
 	}
 }
-

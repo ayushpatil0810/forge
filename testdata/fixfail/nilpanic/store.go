@@ -16,4 +16,3 @@ func (c *Cache) Put(key, val string) {
 func (c *Cache) Get(key string) string {
 	return c.items[key]
 }
-

@@ -53,9 +53,9 @@ type Request struct {
 type StreamEventType int
 
 const (
-	StreamText StreamEventType = iota // incremental text
-	StreamThinking                    // reasoning chunk
-	StreamToolCall                    // a COMPLETE tool call (adapters assemble partial JSON)
+	StreamText     StreamEventType = iota // incremental text
+	StreamThinking                        // reasoning chunk
+	StreamToolCall                        // a COMPLETE tool call (adapters assemble partial JSON)
 	StreamUsage
 	StreamDone
 	StreamError
