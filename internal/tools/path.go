@@ -2,64 +2,211 @@ package tools
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 )
 
+// resolvedPath is a workspace path after symlink and junction resolution.
+type resolvedPath struct {
+	Path      string
+	Traversed bool // a symlink or junction was followed
+}
+
 // ResolveInRoot resolves a relative or absolute path against the workspace root
-// and guarantees the real canonical path (after symlink evaluation) stays inside root.
-// Handles Windows drive letters, case-insensitivity, and UNC paths (SEC-8).
+// and guarantees the real path stays inside root. The nearest existing ancestor
+// is resolved with EvalSymlinks before any missing suffix is reattached, so a
+// junction or symlink whose final component does not exist cannot escape (F-001).
 func ResolveInRoot(root, p string) (string, error) {
+	r, err := resolvePath(root, p)
+	if err != nil {
+		return "", err
+	}
+	return r.Path, nil
+}
+
+func resolvePath(root, p string) (resolvedPath, error) {
 	if root == "" {
 		root = "."
 	}
-	absRoot, err := filepath.Abs(root)
+	realRoot, err := canonicalRoot(root)
+	if err != nil {
+		return resolvedPath{}, err
+	}
+	p = normalizeInputPath(p)
+	if p == "" || p == "." {
+		return resolvedPath{Path: realRoot}, nil
+	}
+
+	var parts []string
+	if filepath.IsAbs(stripExtendedPrefix(p)) {
+		abs := stripExtendedPrefix(p)
+		if !sameVolume(realRoot, abs) {
+			return resolvedPath{}, fmt.Errorf("path %q is outside the workspace (different drive or UNC root)", p)
+		}
+		rel, ok := relativeUnder(realRoot, abs)
+		if !ok {
+			return resolvedPath{}, fmt.Errorf("path %q is outside the workspace", p)
+		}
+		parts = splitPath(rel)
+	} else {
+		parts = splitPath(p)
+	}
+
+	current := realRoot
+	var pending []string
+	traversed := false
+	for _, part := range parts {
+		if part == "" || part == "." {
+			continue
+		}
+		if part == ".." {
+			if len(pending) > 0 {
+				return resolvedPath{}, fmt.Errorf("path %q is outside the workspace", p)
+			}
+			parent := filepath.Dir(current)
+			if !withinRoot(realRoot, parent) {
+				return resolvedPath{}, fmt.Errorf("path %q is outside the workspace", p)
+			}
+			current = parent
+			continue
+		}
+		if len(pending) > 0 {
+			pending = append(pending, part)
+			continue
+		}
+		next := filepath.Join(current, part)
+		fi, statErr := os.Lstat(next)
+		if statErr != nil {
+			if os.IsNotExist(statErr) {
+				pending = append(pending, part)
+				continue
+			}
+			return resolvedPath{}, fmt.Errorf("path %q: %w", p, statErr)
+		}
+		if isLink(fi, next) {
+			resolved, err := resolveLink(next)
+			if err != nil {
+				return resolvedPath{}, fmt.Errorf("path %q: %w", p, err)
+			}
+			resolved = stripExtendedPrefix(resolved)
+			if !withinRoot(realRoot, resolved) {
+				return resolvedPath{}, fmt.Errorf("path %q is outside the workspace", p)
+			}
+			traversed = true
+			current = resolved
+			continue
+		}
+		if !withinRoot(realRoot, next) {
+			return resolvedPath{}, fmt.Errorf("path %q is outside the workspace", p)
+		}
+		current = next
+	}
+
+	final := current
+	for _, part := range pending {
+		if part == "" || part == "." || part == ".." || strings.Contains(part, "..") {
+			return resolvedPath{}, fmt.Errorf("path %q is outside the workspace", p)
+		}
+		final = filepath.Join(final, part)
+	}
+	if !withinRoot(realRoot, final) {
+		return resolvedPath{}, fmt.Errorf("path %q is outside the workspace", p)
+	}
+	if expanded := expandLongPath(final); expanded != "" {
+		final = stripExtendedPrefix(expanded)
+		if !withinRoot(realRoot, final) {
+			return resolvedPath{}, fmt.Errorf("path %q is outside the workspace", p)
+		}
+	}
+	if fi, err := os.Lstat(final); err == nil && isLink(fi, final) {
+		resolved, err := resolveLink(final)
+		if err != nil {
+			return resolvedPath{}, fmt.Errorf("path %q: %w", p, err)
+		}
+		resolved = stripExtendedPrefix(resolved)
+		if !withinRoot(realRoot, resolved) {
+			return resolvedPath{}, fmt.Errorf("path %q is outside the workspace", p)
+		}
+		traversed = true
+		final = stripExtendedPrefix(expandLongPath(resolved))
+	}
+	return resolvedPath{Path: final, Traversed: traversed}, nil
+}
+
+func canonicalRoot(root string) (string, error) {
+	abs, err := filepath.Abs(root)
 	if err != nil {
 		return "", fmt.Errorf("resolving workspace root: %w", err)
 	}
-	absRoot = filepath.Clean(absRoot)
-	if realRoot, err := filepath.EvalSymlinks(absRoot); err == nil {
-		absRoot = realRoot
+	abs = filepath.Clean(abs)
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = stripExtendedPrefix(real)
 	}
+	return abs, nil
+}
 
-	var target string
-	p = normalizeInputPath(p)
-	if p == "" || p == "." {
-		target = absRoot
-	} else if filepath.IsAbs(p) {
-		target = filepath.Clean(p)
-	} else {
-		target = filepath.Clean(filepath.Join(absRoot, p))
+func splitPath(p string) []string {
+	p = strings.ReplaceAll(p, `\`, "/")
+	return strings.Split(p, "/")
+}
+
+func sameVolume(root, p string) bool {
+	rv := strings.ToUpper(filepath.VolumeName(stripExtendedPrefix(root)))
+	pv := strings.ToUpper(filepath.VolumeName(stripExtendedPrefix(p)))
+	return rv == pv
+}
+
+// relativeUnder reports the path of abs relative to root without cleaning ".."
+// away, so a symlink followed by ".." is still visible to the walker.
+func relativeUnder(root, abs string) (string, bool) {
+	root = stripExtendedPrefix(filepath.Clean(root))
+	abs = stripExtendedPrefix(abs)
+	if runtime.GOOS == "windows" {
+		if strings.EqualFold(abs, root) {
+			return "", true
+		}
+		if len(abs) > len(root) && strings.EqualFold(abs[:len(root)], root) {
+			sep := abs[len(root)]
+			if sep == '\\' || sep == '/' {
+				return abs[len(root)+1:], true
+			}
+		}
+		return "", false
 	}
-
-	// Evaluate symlinks on target if it exists
-	if realTarget, err := filepath.EvalSymlinks(target); err == nil {
-		target = realTarget
+	if abs == root {
+		return "", true
 	}
-
-	// Windows drive letter check: volumes must match
-	rootVol := strings.ToUpper(filepath.VolumeName(absRoot))
-	targetVol := strings.ToUpper(filepath.VolumeName(target))
-	if rootVol != targetVol {
-		return "", fmt.Errorf("path %q is outside the workspace (different drive %q vs %q)", p, targetVol, rootVol)
+	sep := string(filepath.Separator)
+	if strings.HasPrefix(abs, root+sep) {
+		return abs[len(root)+len(sep):], true
 	}
+	return "", false
+}
 
-	// Compute relative path
-	rel, err := filepath.Rel(absRoot, target)
+func withinRoot(root, target string) bool {
+	root = stripExtendedPrefix(filepath.Clean(root))
+	target = stripExtendedPrefix(filepath.Clean(target))
+	if runtime.GOOS == "windows" {
+		root = strings.ToLower(root)
+		target = strings.ToLower(target)
+	}
+	if root == target {
+		return true
+	}
+	rel, err := filepath.Rel(root, target)
 	if err != nil {
-		return "", fmt.Errorf("path %q is outside the workspace: %w", p, err)
+		return false
 	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
 
-	// Check if path escapes upwards
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("path %q is outside the workspace", p)
+func isLink(fi os.FileInfo, path string) bool {
+	if fi != nil && fi.Mode()&os.ModeSymlink != 0 {
+		return true
 	}
-
-	if expanded := expandLongPath(target); expanded != "" {
-		target = stripExtendedPrefix(expanded)
-	}
-	return target, nil
+	return isReparsePoint(path)
 }
 
 // normalizeInputPath applies Win32's trailing-dot and trailing-space stripping

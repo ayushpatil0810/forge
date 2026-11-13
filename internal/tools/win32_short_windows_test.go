@@ -23,16 +23,16 @@ func TestShortNameResolvesToProtectedLongName(t *testing.T) {
 	if err != nil || short == "" || strings.EqualFold(filepath.Clean(short), filepath.Clean(full)) {
 		t.Skipf("8.3 short name was not created for %s (err=%v short=%q); not testable on this volume", longName, err, short)
 	}
-	rel, err := filepath.Rel(ws, short)
-	if err != nil {
-		t.Fatal(err)
+	base := filepath.Base(short)
+	if _, err := os.Lstat(filepath.Join(ws, base)); err != nil {
+		t.Skipf("short name %q is not a direct child of the long directory: %v", base, err)
 	}
-	resolved, err := tools.ResolveInRoot(ws, rel)
+	resolved, err := tools.ResolveInRoot(ws, base)
 	if err != nil {
-		t.Fatalf("ResolveInRoot(%q): %v", rel, err)
+		t.Fatalf("ResolveInRoot(%q): %v", base, err)
 	}
 	if !strings.EqualFold(filepath.Base(resolved), longName) {
-		t.Fatalf("short name %q resolved to %q, want base %q", rel, resolved, longName)
+		t.Fatalf("short name %q resolved to %q, want base %q", base, resolved, longName)
 	}
 	if !tools.IsProtectedPath(resolved) {
 		t.Fatalf("long name %q is not classified protected", resolved)
