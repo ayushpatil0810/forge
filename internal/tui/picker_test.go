@@ -51,8 +51,10 @@ func sampleSessionsForPicker() []session.SessionSummary {
 }
 
 func TestSessionPicker_GoldenSnapshots(t *testing.T) {
+	refTime := time.Date(2026, 11, 13, 14, 30, 0, 0, time.UTC)
 	sessions := sampleSessionsForPicker()
 	picker := tui.NewSessionPicker(sessions)
+	picker.NowFunc = func() time.Time { return refTime }
 	styles := tui.NewStyles(tui.DarkTheme())
 
 	widths := []int{60, 80, 120}
