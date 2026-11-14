@@ -46,7 +46,22 @@ Every configuration option supported by Forge:
 | `audit.required` | `boolean` | `false` | `FORGE_AUDIT_REQUIRED` | - | If true, fails closed (denies actions) when audit logging fails. |
 | `redaction` | `object` | `{}` | - | - | Sensitive credentials redaction settings (user config only). |
 | `redaction.tool_output` | `boolean` | `true` | `FORGE_REDACTION_TOOL_OUTPUT` | - | Automatically masks secrets and API keys in tool outputs. |
+| `context` | `object` | `{}` | `FORGE_CONTEXT_WINDOW` | `--context-window`, `--no-auto-compact` | Automatic context compaction and window settings (user config only). |
+| `context.auto_compact` | `boolean` | `true` | - | `--no-auto-compact` | Enable automatic context compaction at tier thresholds. |
+| `context.window` | `integer` | `0` | `FORGE_CONTEXT_WINDOW` | `--context-window` | Context window size override in tokens (0 = use model catalog). |
+| `context.tier1_threshold` | `number` | `0.60` | - | - | Tier 1 threshold fraction (clears old tool outputs). |
+| `context.tier2_threshold` | `number` | `0.80` | - | - | Tier 2 threshold fraction (summarizes older conversation turns). |
+| `context.emergency_threshold` | `number` | `0.92` | - | - | Emergency threshold fraction (hard stop if summarization unavailable). |
+| `context.keep_recent_turns` | `integer` | `6` | - | - | Number of recent turns to preserve verbatim during compaction. |
+| `context.summary_max_tokens` | `integer` | `1500` | - | - | Maximum tokens requested for model summarization. |
+| `budget` | `object` | `{}` | `FORGE_MAX_COST`, `FORGE_MAX_TOKENS` | `--max-cost`, `--max-tokens` | Per-session token and cost budgets (user config only). |
+| `budget.max_cost` | `number` | `0` | `FORGE_MAX_COST` | `--max-cost` | Maximum cost budget in USD for this session run. |
+| `budget.max_tokens` | `integer` | `0` | `FORGE_MAX_TOKENS` | `--max-tokens` | Maximum cumulative token budget (input + output + compaction) for this session run. |
 | `providers` | `array` | `[]` | - | - | Array of named provider profiles with custom base URLs and default models. |
+| `models` | `object` | `{}` | - | - | User-saved model metadata keyed by `provider/model` (e.g. `anthropic/claude-sonnet-5-5`), containing optional `context_window`, `price_in`, and `price_out` in USD per million tokens (user config only). |
+| `context_window` | `integer` | `0` | - | - | Model context window size (user config only, forbidden in project config). |
+| `price_in` | `number` | `0` | - | - | Model input price in USD per million tokens (user config only, forbidden in project config). |
+| `price_out` | `number` | `0` | - | - | Model output price in USD per million tokens (user config only, forbidden in project config). |
 | `ignored_project_keys` | `object` | `{}` | - | - | Map of untrusted project configuration keys ignored due to security policy. |
 
 ---

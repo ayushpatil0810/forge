@@ -4,8 +4,8 @@
 > Source of truth for requirements is `SPEC.md`. This file tracks execution only.
 > Specification coverage matrix: [docs/COVERAGE.md](COVERAGE.md)
 
-**Last updated:** 2026-11-14 by lead engineer
-**Current phase:** Phase 1 Complete → Phase 2 (Slice 9 Complete; Awaiting Human Verifications)
+**Last updated:** 2026-11-15 by lead engineer
+**Current phase:** Phase 1 Complete → Phase 2 (Slice 9b Complete; Ready for PR Review)
 
 ---
 
@@ -29,7 +29,7 @@
 
 ## 1. Current focus
 
-> Slice 9a (Policy file, audit log and secret handling) is implemented and its automated exit check passed. Awaiting human live verification per `docs/VERIFY.md` across CI (ISSUE-2), Slice 6 (fresh-machine check, demo recording), Slice 7 (`/undo`), Slice 8 (`forge auth`), Slice 9 (resumption), and Slice 9a (policy & audit). Security review fixes for commit caeb2af are on branch `fix/security-1` and are waiting for a go-ahead before anything further.
+> Slice 9b (Automatic context compaction and token/cost budgets) is fully implemented and all exit checks passed under `-race` (50-turn scripted compaction test, 144k exec fuzz property test, budget exit code tests, TUI tests). Ready for PR review on `feat/compaction-budgets`.
 
 ---
 
@@ -292,6 +292,7 @@ Newest first. Format: `YYYY-MM-DD · Slice N · what was done · evidence (commi
 
 | Date       | Slice | What                                                                                                                      | Evidence                                              |
 | ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| 2026-11-15 | 9b    | Context compaction (A-7) and token/cost budgets (A-6): unified ContextInfo resolver with strict precedence (flag, user config, local server probe, catalog fallback, unknown), PriceInfo resolver with catalog note, token accounting (ground truth + calibration ratio), proactive multi-tier compaction (Tier 1 tool output clearing at 60%, Tier 2 summarization with deterministic facts & injection hardening at 80%, emergency at 92%), reactive single-retry compaction on typed *llm.ContextLengthError, immutable s.history transcript (Amendment E), SQLite compactions table & resume reconstruction via agent.BuildModelView, budget tracker (--max-cost, --max-tokens, budget.* config, exit code 5, exit code 2 on unknown price), TUI footer budget display, /cost, /budget, /compact, /model metadata | `internal/agent/scripted_50turn_test.go`, `internal/agent/fuzz_compaction_test.go` (144k execs), `internal/agent/compact_test.go`, `internal/agent/budget_test.go`, `cmd/forge/budget_exit_test.go`; all pass under `-race` |
 | 2026-11-14 | review | Security review fixes F-006, F-007, F-008, F-010, F-021, F-015, F-014, F-001, F-002, F-017 on `fix/security-1` | See the Security review fixes section. Regression tests are named in `docs/COVERAGE.md` for SEC-1, S-5, SEC-6, SEC-8, and P-6 |
 | 2026-11-13 | 9a    | Layered security policies, audit logging and secret handling: user (~/.forge/policy.json) and project (.forge/policy.json) policies (P-4), untrusted repo defense (ignore project allow rules), hard safety floor, shell command segment splitting/opacity/hazard analysis, path matching, credential file prompt in all modes and grep/glob skip (SEC-5, P-6), high-confidence regex redactor, 5 approval keys (y, a, A, n, f with 500-char redacted feedback) (P-3), CLI policy commands, tamper-evident SHA-256 hash-chained JSONL audit log with verify/rotation/fail-closed (P-7), docs (policy.md, audit.md, VERIFY.md) | `cmd/forge/policy_audit_exit_test.go:TestSlice9a_AutomatedExitCheck` (1.735s), `internal/policy/bash_test.go`, `internal/redact/redact_test.go`, `internal/audit/logger_test.go`, `internal/tui/approval_teatest_test.go`; all pass under `-race` |
 | 2026-11-13 | Git hygiene | Committed Slices 7–9 in logical groups (deps/toolchain, checkpoints core, credentials core, session core, engine/CLI/TUI integration, docs) with clean race test verification and push | Commits ac1e4b5, 1648572, 87db922, 559bd77, ef6a0b9, fa27955; `go test -race -count=1 ./...` passes 100% |

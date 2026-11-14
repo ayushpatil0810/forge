@@ -326,6 +326,20 @@ func (p *Provider) streamWithRetry(ctx context.Context, bodyBytes []byte, ch cha
 			errMsg = fmt.Sprintf("gemini API error (%d): %s", res.StatusCode, strings.TrimSpace(string(respBody)))
 		}
 
+		if res.StatusCode == http.StatusBadRequest {
+			lowerMsg := strings.ToLower(errResp.Error.Message)
+			// Gemini context length error: INVALID_ARGUMENT and exceeds maximum tokens (Amendment D).
+			// Docs: https://ai.google.dev/gemini-api/docs/troubleshooting
+			if errResp.Error.Status == "INVALID_ARGUMENT" &&
+				(strings.Contains(lowerMsg, "exceeds the maximum number of tokens allowed") ||
+					(strings.Contains(lowerMsg, "token count") && strings.Contains(lowerMsg, "exceeds"))) {
+				return nil, false, 0, &llm.ContextLengthError{
+					Provider: "gemini",
+					Message:  errMsg,
+				}
+			}
+		}
+
 		return nil, isRetryable, retryAfter, errors.New(errMsg)
 	})
 

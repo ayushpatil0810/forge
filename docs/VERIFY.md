@@ -248,3 +248,34 @@ $projPolicy | Set-Content (Join-Path $scratch ".forge\policy.json")
 Record in `docs/PROGRESS.md`:
 - Note if project policy allow rules were accepted (critical security bug).
 - Note if tamper verification failed or audit log failed to append.
+
+---
+
+## 7. Slice 9b: Context Compaction & Token/Cost Budgets
+
+*(Dry-runnable with mock provider)*
+
+### Steps
+```powershell
+# 1. Budget unknown price refusal (Exit code 2)
+& $forge run --provider mock --model unknown-model --max-cost 5.00 "Hello"
+# Must exit with code 2 and complain that pricing is unknown
+
+# 2. Budget enforcement (Exit code 5)
+& $forge run --provider mock --model mock-model --max-cost 0.01 --output json "Run command"
+# Must exit with code 5, status: budget_exceeded
+
+# 3. Context compaction verification
+go test -v ./internal/agent -run "TestScripted50TurnConversation_CrossingTiers"
+go test -v ./internal/agent -run "TestCompactionRandomizedPropertyChecks"
+
+# 4. TUI verification
+go test -v ./internal/tui -run "TestTUI_CompactionEventsAndFooter|TestTUI_Commands_CostAndBudget"
+```
+
+### Expected Result
+- `--max-cost` on unknown-priced model refuses to start with exit code 2.
+- Headless execution exceeding budget halts with exit code 5 and JSON status `budget_exceeded`.
+- 50-turn conversation crosses Tier 1 and Tier 2 compactions cleanly, preserves last 6 turns verbatim, and maintains uncompacted SQLite transcript.
+- Compacted model view passes strict Anthropic, OpenAI, and Gemini message format validators without orphan tool results.
+

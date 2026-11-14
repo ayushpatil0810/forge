@@ -13,8 +13,8 @@ This document tracks implementation status, delivery slices, and automated test 
 | `A-3` | Run independent tool calls concurrently | P1 | `PLANNED` | Slice 11 | Planned for Slice 11; currently sequential to guarantee strict state ordering |
 | `A-4` | Cancellation at any point via `context.Context` | P0 | `DONE` | Slice 1 | `internal/agent/local.go` (`s.Cancel()`, context propagation); tested in `internal/agent/agent_test.go:TestCancellationHonored` |
 | `A-5` | Break runaway loops (max iterations, duplicate calls) | P0 | `DONE` | Slice 1 & 5 | `internal/agent/local.go` (`loopGuardThreshold = 10`), stall detection; tested in `internal/agent/agent_test.go:TestLoopGuardThreshold` |
-| `A-6` | Enforce per-session token and cost budgets | P1 | `PLANNED` | Slice 9b | Planned for Slice 9b context compaction and token budgets |
-| `A-7` | Compact context approaching model window limit | P1 | `PLANNED` | Slice 9b | Planned for Slice 9b context compaction and token budgets; tool output caps active in `internal/tools/` |
+| `A-6` | Enforce per-session token and cost budgets | P1 | `DONE` | Slice 9b | `internal/agent/budget.go`, `cmd/forge/main.go` (`--max-cost`, `--max-tokens`), `docs/budgets.md`; tested in `internal/agent/budget_test.go`, `cmd/forge/budget_exit_test.go:TestBudget_HeadlessExitCode5` |
+| `A-7` | Compact context approaching model window limit | P1 | `DONE` | Slice 9b | `internal/agent/compact.go` (Tiers 1/2/emergency, reactive compaction), `docs/context.md`; tested in `internal/agent/compact_test.go`, `internal/agent/scripted_50turn_test.go`, `internal/agent/fuzz_compaction_test.go` |
 | `A-8` | Retry transient errors with exponential backoff | P0 | `DONE` | Slice 1 & 6 | `internal/agent/local.go` (`retryTransientWithBackoff`), `internal/agent/errors.go`; tested in `internal/agent/agent_test.go:TestRetryTransientErrorWithBackoff` |
 | `A-9` | Subagents for parallel, isolated research tasks | P2 | `PARKED` | Phase 2 | Parked for Phase 2 |
 

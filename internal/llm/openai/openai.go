@@ -408,6 +408,8 @@ func (p *Provider) streamWithRetry(ctx context.Context, bodyBytes []byte, ch cha
 			Error struct {
 				Type    string `json:"type"`
 				Message string `json:"message"`
+				Code    any    `json:"code"`
+				Param   string `json:"param"`
 			} `json:"error"`
 		}
 		if json.Unmarshal(respBody, &errResp) == nil && errResp.Error.Message != "" {
@@ -416,9 +418,35 @@ func (p *Provider) streamWithRetry(ctx context.Context, bodyBytes []byte, ch cha
 			errMsg = fmt.Sprintf("openai API error (%d): %s", res.StatusCode, strings.TrimSpace(string(respBody)))
 		}
 
-		// Tool calling rejection handling (fail fast, non-looping, suggest plan mode)
 		if res.StatusCode == http.StatusBadRequest || res.StatusCode == http.StatusUnprocessableEntity {
+			codeStr := fmt.Sprintf("%v", errResp.Error.Code)
 			lowerMsg := strings.ToLower(errMsg)
+
+			// 1. Official OpenAI typed error code "context_length_exceeded"
+			// Docs: https://platform.openai.com/docs/guides/error-codes
+			if codeStr == "context_length_exceeded" {
+				return nil, false, 0, &llm.ContextLengthError{
+					Provider: "openai",
+					Message:  errMsg,
+				}
+			}
+
+			// 2. Conservative fallback for local OpenAI-compatible servers (Amendment D)
+			isLocal := p.baseURL != ""
+			isTPMRateLimit := strings.Contains(lowerMsg, "tokens per minute") || strings.Contains(lowerMsg, "tpm")
+			isMaxTokensParam := (strings.Contains(lowerMsg, "max_tokens") || strings.Contains(lowerMsg, "max_completion_tokens")) && (strings.Contains(lowerMsg, "too large") || strings.Contains(lowerMsg, "must be <="))
+			isOtherField := errResp.Error.Param != "" && errResp.Error.Param != "messages" && errResp.Error.Param != "input" && errResp.Error.Param != "prompt"
+
+			if isLocal && !isTPMRateLimit && !isMaxTokensParam && !isOtherField {
+				if strings.Contains(lowerMsg, "context length") || strings.Contains(lowerMsg, "context window") || strings.Contains(lowerMsg, "exceeds the context window") || strings.Contains(lowerMsg, "exceeds maximum context") {
+					return nil, false, 0, &llm.ContextLengthError{
+						Provider: "openai",
+						Message:  errMsg,
+					}
+				}
+			}
+
+			// Tool calling rejection handling (fail fast, non-looping, suggest plan mode)
 			if strings.Contains(lowerMsg, "tool") || strings.Contains(lowerMsg, "function") || strings.Contains(lowerMsg, "not support") || strings.Contains(lowerMsg, "unrecognized request argument") {
 				return nil, false, 0, fmt.Errorf("model %q does not support tool calling: %s. Use a tool-capable model (e.g. qwen2.5-coder, llama3.3) or run with 'plan' mode (which does not execute tools)", p.model, errMsg)
 			}

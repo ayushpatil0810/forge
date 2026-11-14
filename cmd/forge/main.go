@@ -51,6 +51,10 @@ var (
 	noSessionFlag            bool
 	systemPromptFlag         string
 	allowInsecureBaseURLFlag bool
+	noAutoCompactFlag        bool
+	contextWindowFlag        int
+	maxCostFlag              float64
+	maxTokensFlag            int
 
 	// observeSystemPrompt records the prompt each CLI entry point would send.
 	// Tests set it; production leaves it nil.
@@ -135,6 +139,10 @@ func newRootCmd() *cobra.Command {
 	cmd.PersistentFlags().BoolVar(&noSessionFlag, "no-session", false, "ephemeral run without persisting session to SQLite")
 	cmd.PersistentFlags().StringVar(&systemPromptFlag, "system-prompt", "", "additional instructions appended after the built security prompt")
 	cmd.PersistentFlags().BoolVar(&allowInsecureBaseURLFlag, "allow-insecure-base-url", false, "allow a non-loopback http:// API base URL")
+	cmd.PersistentFlags().BoolVar(&noAutoCompactFlag, "no-auto-compact", false, "disable automatic context compaction")
+	cmd.PersistentFlags().IntVar(&contextWindowFlag, "context-window", 0, "override model context window size in tokens")
+	cmd.PersistentFlags().Float64Var(&maxCostFlag, "max-cost", 0, "maximum spend budget in USD for this run")
+	cmd.PersistentFlags().IntVar(&maxTokensFlag, "max-tokens", 0, "maximum total tokens budget (input+output) for this run")
 
 	cmd.AddCommand(newRunCmd())
 	cmd.AddCommand(newConfigCmd())
@@ -203,6 +211,10 @@ func newConfigCmd() *cobra.Command {
 				SystemPrompt:         systemPromptFlag,
 				AllowInsecureBaseURL: allowInsecureBaseURLFlag,
 				SessionsEnabled:      sessionsEnabledFromFlag(),
+				NoAutoCompact:        noAutoCompactFromFlag(),
+				ContextWindow:        contextWindowFlag,
+				MaxCost:              maxCostFlag,
+				MaxTokensBudget:      maxTokensFlag,
 			})
 			if err != nil {
 				return ExitCodeError{Code: 2, Err: err}
@@ -711,6 +723,10 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 		SystemPrompt:         systemPromptFlag,
 		AllowInsecureBaseURL: allowInsecureBaseURLFlag,
 		SessionsEnabled:      sessionsEnabledFromFlag(),
+		NoAutoCompact:        noAutoCompactFromFlag(),
+		ContextWindow:        contextWindowFlag,
+		MaxCost:              maxCostFlag,
+		MaxTokensBudget:      maxTokensFlag,
 		MaxTurns:             maxTurns,
 		PermissionMode:       permMode,
 	})
@@ -719,6 +735,58 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 	}
 	for _, w := range cfg.Warnings {
 		fmt.Fprintf(os.Stderr, "Warning: %s\n", w)
+	}
+
+	activeProvider := cfg.Provider
+	activeModel := cfg.Model
+	if demoFlag {
+		activeProvider = "mock"
+		activeModel = "demo"
+	}
+	var userPriceIn, userPriceOut float64
+	var userContextWindow int
+	key := config.ModelKey(activeProvider, activeModel)
+	if cfg.Models != nil {
+		if entry, ok := cfg.Models[key]; ok {
+			if entry.ContextWindow > 0 {
+				userContextWindow = entry.ContextWindow
+			}
+			userPriceIn = entry.PriceIn
+			userPriceOut = entry.PriceOut
+		}
+	}
+	var overrideContextWindow int
+	var tier1Thresh, tier2Thresh, emergThresh float64
+	var keepRecentTurns, summaryMaxTokens int
+	autoCompactEnabled := true
+	if cfg.Context != nil {
+		if cfg.Context.Window > 0 {
+			overrideContextWindow = cfg.Context.Window
+		}
+		tier1Thresh = cfg.Context.Tier1Threshold
+		tier2Thresh = cfg.Context.Tier2Threshold
+		emergThresh = cfg.Context.EmergencyThreshold
+		keepRecentTurns = cfg.Context.KeepRecentTurns
+		summaryMaxTokens = cfg.Context.SummaryMaxTokens
+		if cfg.Context.AutoCompact != nil {
+			autoCompactEnabled = *cfg.Context.AutoCompact
+		}
+	}
+	ctxInfo := llm.ResolveContextInfo(activeProvider, activeModel, overrideContextWindow, userContextWindow, 0)
+	priceInfo := llm.ResolvePriceInfo(activeProvider, activeModel, userPriceIn, userPriceOut)
+
+	var maxCostBudget float64
+	var maxTokensBudget int
+	if cfg.Budget != nil {
+		maxCostBudget = cfg.Budget.MaxCost
+		maxTokensBudget = cfg.Budget.MaxTokens
+	}
+
+	if maxCostBudget > 0 && !priceInfo.Known {
+		return ExitCodeError{
+			Code: 2,
+			Err:  fmt.Errorf("model %q has unknown pricing; set prices for the model in configuration, or use --max-tokens to enforce a token budget", activeModel),
+		}
 	}
 
 	if demoFlag && rootFlag == "." {
@@ -790,10 +858,12 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 			mock.Turn{
 				mock.Text("I will inspect the failing tests in this repository using `bash`.\n"),
 				mock.ToolUse("demo1", "bash", map[string]any{"command": "go test ./..."}),
+				mock.Usage(50, 10),
 			},
 			mock.Turn{
 				mock.Text("The test failed: `TestDiscount` expected 15% discount for orders >= 100. Let me read `discount.go`.\n"),
 				mock.ToolUse("demo2", "read_file", map[string]any{"path": "discount.go"}),
+				mock.Usage(50, 10),
 			},
 			mock.Turn{
 				mock.Text("The logic currently uses `amount > 100`, excluding orders of exactly 100. Let me fix the boundary condition.\n"),
@@ -802,13 +872,16 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 					"old_string": "if amount > 100 {",
 					"new_string": "if amount >= 100 {",
 				}),
+				mock.Usage(50, 10),
 			},
 			mock.Turn{
 				mock.Text("The code has been corrected. Re-running the test suite to verify.\n"),
 				mock.ToolUse("demo4", "bash", map[string]any{"command": "go test -v ./..."}),
+				mock.Usage(50, 10),
 			},
 			mock.Turn{
 				mock.Text("All tests are passing! I have fixed the boundary condition in `discount.go` so that orders of exactly 100 receive the intended 15% discount."),
+				mock.Usage(50, 10),
 			},
 		)
 		toolRegistry = tools.DemoTools(cfg.WorkspaceRoot, demoSpeedFlag)
@@ -887,18 +960,28 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 	})
 
 	s := agent.NewLocal(agent.Config{
-		ID:           sessionID,
-		History:      sessionHistory,
-		Provider:     provider,
-		Tools:        toolRegistry,
-		Policy:       permission.Policy{Mode: resolvedMode},
-		PolicySet:    ps,
-		AuditLogger:  auditLogger,
-		System:       systemPrompt,
-		MaxTurns:     cfg.MaxTurns,
-		Checkpointer: checkpointer,
-		IsHeadless:   true,
-		AutoApprove:  yesFlag || yoloFlag,
+		ID:                 sessionID,
+		History:            sessionHistory,
+		Provider:           provider,
+		Tools:              toolRegistry,
+		Policy:             permission.Policy{Mode: resolvedMode},
+		PolicySet:          ps,
+		AuditLogger:        auditLogger,
+		System:             systemPrompt,
+		MaxTurns:           cfg.MaxTurns,
+		Checkpointer:       checkpointer,
+		IsHeadless:         true,
+		AutoApprove:        yesFlag || yoloFlag,
+		ContextWindow:      ctxInfo.Window,
+		AutoCompact:        autoCompactEnabled,
+		Tier1Threshold:     tier1Thresh,
+		Tier2Threshold:     tier2Thresh,
+		EmergencyThreshold: emergThresh,
+		KeepRecentTurns:    keepRecentTurns,
+		SummaryMaxTokens:   summaryMaxTokens,
+		MaxCostBudget:      maxCostBudget,
+		MaxTokensBudget:    maxTokensBudget,
+		SessionStore:       store,
 	})
 	defer s.Close()
 
@@ -1077,6 +1160,13 @@ eventLoop:
 		return ExitCodeError{Code: 4, Err: errors.New("permission denied")}
 	}
 
+	if finalDone != nil && finalDone.Reason == "budget_exceeded" {
+		if outputFormat == "text" {
+			fmt.Fprintln(os.Stderr, "budget exceeded: spend reached maximum allowed budget")
+		}
+		return ExitCodeError{Code: 5, Err: errors.New("budget exceeded")}
+	}
+
 	return nil
 }
 
@@ -1091,12 +1181,68 @@ func runInteractive(ctx context.Context) error {
 		SystemPrompt:         systemPromptFlag,
 		AllowInsecureBaseURL: allowInsecureBaseURLFlag,
 		SessionsEnabled:      sessionsEnabledFromFlag(),
+		NoAutoCompact:        noAutoCompactFromFlag(),
+		ContextWindow:        contextWindowFlag,
+		MaxCost:              maxCostFlag,
+		MaxTokensBudget:      maxTokensFlag,
 	})
 	if err != nil {
 		return ExitCodeError{Code: 2, Err: fmt.Errorf("loading config: %w", err)}
 	}
 	for _, w := range cfg.Warnings {
 		fmt.Fprintf(os.Stderr, "Warning: %s\n", w)
+	}
+
+	activeProvider := cfg.Provider
+	activeModel := cfg.Model
+	if demoFlag {
+		activeProvider = "mock"
+		activeModel = "demo"
+	}
+	var userPriceIn, userPriceOut float64
+	var userContextWindow int
+	key := config.ModelKey(activeProvider, activeModel)
+	if cfg.Models != nil {
+		if entry, ok := cfg.Models[key]; ok {
+			if entry.ContextWindow > 0 {
+				userContextWindow = entry.ContextWindow
+			}
+			userPriceIn = entry.PriceIn
+			userPriceOut = entry.PriceOut
+		}
+	}
+	var overrideContextWindow int
+	var tier1Thresh, tier2Thresh, emergThresh float64
+	var keepRecentTurns, summaryMaxTokens int
+	autoCompactEnabled := true
+	if cfg.Context != nil {
+		if cfg.Context.Window > 0 {
+			overrideContextWindow = cfg.Context.Window
+		}
+		tier1Thresh = cfg.Context.Tier1Threshold
+		tier2Thresh = cfg.Context.Tier2Threshold
+		emergThresh = cfg.Context.EmergencyThreshold
+		keepRecentTurns = cfg.Context.KeepRecentTurns
+		summaryMaxTokens = cfg.Context.SummaryMaxTokens
+		if cfg.Context.AutoCompact != nil {
+			autoCompactEnabled = *cfg.Context.AutoCompact
+		}
+	}
+	ctxInfo := llm.ResolveContextInfo(activeProvider, activeModel, overrideContextWindow, userContextWindow, 0)
+	priceInfo := llm.ResolvePriceInfo(activeProvider, activeModel, userPriceIn, userPriceOut)
+
+	var maxCostBudget float64
+	var maxTokensBudget int
+	if cfg.Budget != nil {
+		maxCostBudget = cfg.Budget.MaxCost
+		maxTokensBudget = cfg.Budget.MaxTokens
+	}
+
+	if maxCostBudget > 0 && !priceInfo.Known {
+		return ExitCodeError{
+			Code: 2,
+			Err:  fmt.Errorf("model %q has unknown pricing; set prices for the model in configuration, or use --max-tokens to enforce a token budget", activeModel),
+		}
 	}
 
 	if demoFlag && rootFlag == "." {
@@ -1185,10 +1331,12 @@ func runInteractive(ctx context.Context) error {
 			mock.Turn{
 				mock.Text("I will inspect the failing tests in this repository using `bash`.\n"),
 				mock.ToolUse("demo1", "bash", map[string]any{"command": "go test ./..."}),
+				mock.Usage(50, 10),
 			},
 			mock.Turn{
 				mock.Text("The test failed: `TestDiscount` expected 15% discount for orders >= 100. Let me read `discount.go`.\n"),
 				mock.ToolUse("demo2", "read_file", map[string]any{"path": "discount.go"}),
+				mock.Usage(50, 10),
 			},
 			mock.Turn{
 				mock.Text("The logic currently uses `amount > 100`, excluding orders of exactly 100. Let me fix the boundary condition.\n"),
@@ -1197,13 +1345,16 @@ func runInteractive(ctx context.Context) error {
 					"old_string": "if amount > 100 {",
 					"new_string": "if amount >= 100 {",
 				}),
+				mock.Usage(50, 10),
 			},
 			mock.Turn{
 				mock.Text("The code has been corrected. Re-running the test suite to verify.\n"),
 				mock.ToolUse("demo4", "bash", map[string]any{"command": "go test -v ./..."}),
+				mock.Usage(50, 10),
 			},
 			mock.Turn{
 				mock.Text("All tests are passing! I have fixed the boundary condition in `discount.go` so that orders of exactly 100 receive the intended 15% discount."),
+				mock.Usage(50, 10),
 			},
 		)
 		toolRegistry = tools.DemoTools(cfg.WorkspaceRoot, demoSpeedFlag)
@@ -1285,15 +1436,25 @@ func runInteractive(ctx context.Context) error {
 	})
 
 	s := agent.NewLocal(agent.Config{
-		ID:           sessionID,
-		History:      sessionHistory,
-		Provider:     provider,
-		Tools:        toolRegistry,
-		Policy:       permission.Policy{Mode: permMode},
-		PolicySet:    ps,
-		AuditLogger:  auditLogger,
-		System:       systemPrompt,
-		Checkpointer: checkpointer,
+		ID:                 sessionID,
+		History:            sessionHistory,
+		Provider:           provider,
+		Tools:              toolRegistry,
+		Policy:             permission.Policy{Mode: permMode},
+		PolicySet:          ps,
+		AuditLogger:        auditLogger,
+		System:             systemPrompt,
+		Checkpointer:       checkpointer,
+		ContextWindow:      ctxInfo.Window,
+		AutoCompact:        autoCompactEnabled,
+		Tier1Threshold:     tier1Thresh,
+		Tier2Threshold:     tier2Thresh,
+		EmergencyThreshold: emergThresh,
+		KeepRecentTurns:    keepRecentTurns,
+		SummaryMaxTokens:   summaryMaxTokens,
+		MaxCostBudget:      maxCostBudget,
+		MaxTokensBudget:    maxTokensBudget,
+		SessionStore:       store,
 	})
 	defer s.Close()
 
@@ -1305,6 +1466,7 @@ func runInteractive(ctx context.Context) error {
 	m := tui.New(s, th)
 	m.SetSecurityNotices(cfg.Warnings)
 	m.SetProviderInfo(providerName, modelName)
+	m.SetBudget(maxCostBudget, maxTokensBudget)
 	m.SetBaseURL(cfg.BaseURL)
 	m.SetWorkspaceRoot(cfg.WorkspaceRoot)
 	m.SetSessionStore(store, noSessionFlag)
@@ -1333,6 +1495,14 @@ func sessionsEnabledFromFlag() *bool {
 	}
 	enabled := false
 	return &enabled
+}
+
+func noAutoCompactFromFlag() *bool {
+	if !noAutoCompactFlag {
+		return nil
+	}
+	val := true
+	return &val
 }
 
 func finalizeSystemPrompt(workspace, userPrompt, shell string) string {

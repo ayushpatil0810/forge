@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/ayushpatil0810/forge/internal/llm"
@@ -41,10 +42,12 @@ func init() {
 }
 
 type Provider struct {
-	mu       sync.Mutex
-	turns    []Turn
-	next     int
-	Requests []llm.Request // every request received, for assertions
+	mu              sync.Mutex
+	turns           []Turn
+	next            int
+	Requests        []llm.Request // every request received, for assertions
+	StrictValidator bool          // validates every incoming request with Validator.ValidateAll
+	Handler         func(req llm.Request) (Turn, error)
 }
 
 func New(turns ...Turn) *Provider {
@@ -68,12 +71,29 @@ func (p *Provider) Models() []llm.ModelInfo {
 func (p *Provider) Stream(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, error) {
 	p.mu.Lock()
 	p.Requests = append(p.Requests, req)
-	if p.next >= len(p.turns) {
-		p.mu.Unlock()
-		return nil, errors.New("mock: no more scripted turns")
+	if p.StrictValidator {
+		v := NewValidator()
+		if err := v.ValidateAll(req.Messages); err != nil {
+			p.mu.Unlock()
+			return nil, fmt.Errorf("mock: strict validation failed: %w", err)
+		}
 	}
-	turn := p.turns[p.next]
-	p.next++
+	var turn Turn
+	if p.Handler != nil {
+		var err error
+		turn, err = p.Handler(req)
+		if err != nil {
+			p.mu.Unlock()
+			return nil, err
+		}
+	} else {
+		if p.next >= len(p.turns) {
+			p.mu.Unlock()
+			return nil, errors.New("mock: no more scripted turns")
+		}
+		turn = p.turns[p.next]
+		p.next++
+	}
 	p.mu.Unlock()
 
 	ch := make(chan llm.StreamEvent)

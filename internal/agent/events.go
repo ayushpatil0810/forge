@@ -3,18 +3,21 @@ package agent
 type EventType string
 
 const (
-	EventTokenDelta        EventType = "TokenDelta"
-	EventThinkingDelta     EventType = "ThinkingDelta"
-	EventToolStarted       EventType = "ToolStarted"
-	EventToolOutputDelta   EventType = "ToolOutputDelta"
-	EventToolFinished      EventType = "ToolFinished"
-	EventApprovalRequested EventType = "ApprovalRequested"
-	EventCheckpointCreated EventType = "CheckpointCreated"
-	EventUsageUpdated      EventType = "UsageUpdated"
-	EventRetryScheduled    EventType = "RetryScheduled"
-	EventError             EventType = "Error"
-	EventNotice            EventType = "Notice"
-	EventDone              EventType = "Done"
+	EventTokenDelta          EventType = "TokenDelta"
+	EventThinkingDelta       EventType = "ThinkingDelta"
+	EventToolStarted         EventType = "ToolStarted"
+	EventToolOutputDelta     EventType = "ToolOutputDelta"
+	EventToolFinished        EventType = "ToolFinished"
+	EventApprovalRequested   EventType = "ApprovalRequested"
+	EventCheckpointCreated   EventType = "CheckpointCreated"
+	EventUsageUpdated        EventType = "UsageUpdated"
+	EventRetryScheduled      EventType = "RetryScheduled"
+	EventError               EventType = "Error"
+	EventNotice              EventType = "Notice"
+	EventCompactionStarted   EventType = "CompactionStarted"
+	EventCompactionFinished  EventType = "CompactionFinished"
+	EventContextUsageUpdated EventType = "ContextUsageUpdated"
+	EventDone                EventType = "Done"
 )
 
 type ToolStatus string
@@ -79,9 +82,11 @@ type CheckpointCreatedPayload struct {
 }
 
 type UsageUpdatedPayload struct {
-	InputTokens  int     `json:"inputTokens"`
-	OutputTokens int     `json:"outputTokens"`
-	Cost         float64 `json:"cost"`
+	InputTokens      int     `json:"inputTokens"`
+	OutputTokens     int     `json:"outputTokens"`
+	Cost             float64 `json:"cost"`
+	CompactionTokens int     `json:"compactionTokens,omitempty"`
+	CompactionCost   float64 `json:"compactionCost,omitempty"`
 }
 
 type ErrorPayload struct {
@@ -102,22 +107,46 @@ type DonePayload struct {
 	Reason string `json:"reason"`
 }
 
+type CompactionStartedPayload struct {
+	Tier   int    `json:"tier"`
+	Reason string `json:"reason"`
+}
+
+type CompactionFinishedPayload struct {
+	Tier         int    `json:"tier"`
+	TokensBefore int    `json:"tokens_before"`
+	TokensAfter  int    `json:"tokens_after"`
+	SummaryChars int    `json:"summary_chars"`
+	OK           bool   `json:"ok"`
+	Error        string `json:"error,omitempty"`
+}
+
+type ContextUsagePayload struct {
+	Used    int  `json:"used"`
+	Window  int  `json:"window"`
+	Percent int  `json:"percent"`
+	Known   bool `json:"known"`
+}
+
 // Event is the single, flat, JSON-friendly envelope frontends consume (SPEC §6.4).
 type Event struct {
-	Seq       int64                     `json:"seq"`
-	Type      EventType                 `json:"type"`
-	Token     *TokenDeltaPayload        `json:"token,omitempty"`
-	Thinking  *ThinkingDeltaPayload     `json:"thinking,omitempty"`
-	ToolStart *ToolStartedPayload       `json:"toolStart,omitempty"`
-	ToolOut   *ToolOutputDeltaPayload   `json:"toolOut,omitempty"`
-	ToolDone  *ToolFinishedPayload      `json:"toolDone,omitempty"`
-	Approval  *ApprovalRequestedPayload `json:"approval,omitempty"`
-	Checkpt   *CheckpointCreatedPayload `json:"checkpt,omitempty"`
-	Usage     *UsageUpdatedPayload      `json:"usage,omitempty"`
-	Retry     *RetryScheduledPayload    `json:"retry,omitempty"`
-	Err       *ErrorPayload             `json:"err,omitempty"`
-	Notice    string                    `json:"notice,omitempty"`
-	Done      *DonePayload              `json:"done,omitempty"`
+	Seq             int64                      `json:"seq"`
+	Type            EventType                  `json:"type"`
+	Token           *TokenDeltaPayload         `json:"token,omitempty"`
+	Thinking        *ThinkingDeltaPayload      `json:"thinking,omitempty"`
+	ToolStart       *ToolStartedPayload        `json:"toolStart,omitempty"`
+	ToolOut         *ToolOutputDeltaPayload    `json:"toolOut,omitempty"`
+	ToolDone        *ToolFinishedPayload       `json:"toolDone,omitempty"`
+	Approval        *ApprovalRequestedPayload  `json:"approval,omitempty"`
+	Checkpt         *CheckpointCreatedPayload  `json:"checkpt,omitempty"`
+	Usage           *UsageUpdatedPayload       `json:"usage,omitempty"`
+	ContextUsage    *ContextUsagePayload       `json:"contextUsage,omitempty"`
+	CompactionStart *CompactionStartedPayload  `json:"compactionStart,omitempty"`
+	CompactionDone  *CompactionFinishedPayload `json:"compactionDone,omitempty"`
+	Retry           *RetryScheduledPayload     `json:"retry,omitempty"`
+	Err             *ErrorPayload              `json:"err,omitempty"`
+	Notice          string                     `json:"notice,omitempty"`
+	Done            *DonePayload               `json:"done,omitempty"`
 }
 
 func (e Event) Terminal() bool {

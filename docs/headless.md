@@ -36,6 +36,10 @@ Headless commands do not open the setup screen. They use the provider and model 
 | `--base-url` | `string` | `""` | Custom API base URL (e.g. for Ollama `http://localhost:11434/v1`). |
 | `--root` | `string` | `"."` | Workspace root directory. |
 | `--shell` | `string` | *(auto)* | Host shell executable (`pwsh`, `powershell.exe`, `bash`, `cmd.exe`). |
+| `--context-window` | `integer` | *(auto)* | Override context window size in tokens for compaction triggers. |
+| `--no-auto-compact` | `bool` | `false` | Disable automatic proactive context compaction triggers. |
+| `--max-cost` | `float` | `0` | Hard cap on USD spend for the run (refuses to start with exit code 2 if model price is unknown). |
+| `--max-tokens` | `integer` | `0` | Hard cap on total tokens (input + output + compaction) for the run. |
 
 ---
 
@@ -47,9 +51,10 @@ Forge guarantees strict, predictable exit codes so shell scripts and CI runners 
 | :---: | :--- | :--- |
 | **`0`** | **Success** | Task completed cleanly; model finished and all approved tool calls succeeded. |
 | **`1`** | **Runtime Failure** | LLM API network error, authentication failure, or unrecoverable runtime crash. |
-| **`2`** | **Usage / Config Error** | Invalid flags, unknown command-line arguments, missing prompt, or invalid configuration. |
+| **`2`** | **Usage / Config Error** | Invalid flags, unknown command-line arguments, missing prompt, invalid configuration, or `--max-cost` used on a model with unknown pricing. |
 | **`3`** | **Turn Limit Reached** | Session halted because `max_turns` limit was hit (`code: "max_turns"`). |
 | **`4`** | **Permission Denied** | An action required approval which was not granted, or plan mode blocked mutation. |
+| **`5`** | **Budget Exceeded** | Session halted because token or monetary cost budget was exhausted (`reason: "budget_exceeded"`). |
 
 ---
 
@@ -107,6 +112,12 @@ Schema:
   }
 }
 ```
+
+*Note on `status` values:*
+- `"success"`: Task completed normally (exit code 0).
+- `"error"`: Runtime error or unexpected failure (exit code 1).
+- `"max_turns"`: Halted due to turn cap limit (exit code 3).
+- `"budget_exceeded"`: Halted due to token or monetary cost budget cap (exit code 5).
 
 ### 3. `stream-json`
 - **`stdout`**: Line-delimited JSON (NDJSON) streaming every typed event (`TokenDelta`, `ToolStarted`, `ToolFinished`, `UsageUpdated`, `Done`) in real time.

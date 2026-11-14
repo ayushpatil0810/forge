@@ -77,6 +77,8 @@ type UsageRecord struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+type CompactionRecord = agent.CompactionRecord
+
 // Store provides thread-safe access to session storage in SQLite.
 type Store struct {
 	dbPath string
@@ -559,4 +561,69 @@ func (s *Store) GetUsage(ctx context.Context, sessionID string) ([]UsageRecord, 
 		usages = append(usages, u)
 	}
 	return usages, rows.Err()
+}
+
+// SaveCompaction stores a context compaction record.
+func (s *Store) SaveCompaction(ctx context.Context, c CompactionRecord) error {
+	db, err := s.Open()
+	if err != nil {
+		return err
+	}
+	createdAt := c.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+
+	query := `INSERT INTO compactions (id, session_id, tier, summary, first_message_id, last_message_id, tokens_before, tokens_after, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err = db.ExecContext(ctx, query,
+		c.ID,
+		c.SessionID,
+		c.Tier,
+		c.Summary,
+		c.FirstMessageID,
+		c.LastMessageID,
+		c.TokensBefore,
+		c.TokensAfter,
+		createdAt,
+	)
+	if err != nil {
+		return fmt.Errorf("saving compaction: %w", err)
+	}
+	return nil
+}
+
+// GetCompactions retrieves all compaction records for a session in chronological order.
+func (s *Store) GetCompactions(ctx context.Context, sessionID string) ([]CompactionRecord, error) {
+	db, err := s.Open()
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT id, session_id, tier, summary, first_message_id, last_message_id, tokens_before, tokens_after, created_at
+FROM compactions WHERE session_id = ? ORDER BY created_at ASC`
+	rows, err := db.QueryContext(ctx, query, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("querying compactions: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var compactions []CompactionRecord
+	for rows.Next() {
+		var c CompactionRecord
+		if err := rows.Scan(
+			&c.ID,
+			&c.SessionID,
+			&c.Tier,
+			&c.Summary,
+			&c.FirstMessageID,
+			&c.LastMessageID,
+			&c.TokensBefore,
+			&c.TokensAfter,
+			&c.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scanning compaction row: %w", err)
+		}
+		compactions = append(compactions, c)
+	}
+	return compactions, rows.Err()
 }

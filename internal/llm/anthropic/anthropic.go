@@ -303,6 +303,20 @@ func (p *Provider) streamWithRetry(ctx context.Context, bodyBytes []byte, ch cha
 			errMsg = fmt.Sprintf("anthropic API error (%d): %s", res.StatusCode, strings.TrimSpace(string(respBody)))
 		}
 
+		if res.StatusCode == http.StatusBadRequest {
+			lowerMsg := strings.ToLower(errResp.Error.Message)
+			// Anthropic context length error: "prompt is too long" or "exceed context limit" (Amendment D).
+			// Docs: https://docs.anthropic.com/en/api/errors
+			if errResp.Error.Type == "invalid_request_error" &&
+				(strings.Contains(lowerMsg, "prompt is too long") ||
+					(strings.Contains(lowerMsg, "exceed") && strings.Contains(lowerMsg, "context limit"))) {
+				return nil, false, 0, &llm.ContextLengthError{
+					Provider: "anthropic",
+					Message:  errMsg,
+				}
+			}
+		}
+
 		return nil, isRetryable, retryAfter, errors.New(errMsg)
 	})
 

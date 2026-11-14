@@ -44,25 +44,57 @@ type BashConfig struct {
 	EnvAllow []string `json:"env_allow,omitempty"`
 }
 
+// ContextConfig controls automatic context compaction and window limits (SPEC A-7).
+type ContextConfig struct {
+	AutoCompact        *bool   `json:"auto_compact,omitempty"`
+	Window             int     `json:"window,omitempty"`
+	Tier1Threshold     float64 `json:"tier1_threshold,omitempty"`
+	Tier2Threshold     float64 `json:"tier2_threshold,omitempty"`
+	EmergencyThreshold float64 `json:"emergency_threshold,omitempty"`
+	KeepRecentTurns    int     `json:"keep_recent_turns,omitempty"`
+	SummaryMaxTokens   int     `json:"summary_max_tokens,omitempty"`
+}
+
+// UserModelEntry holds user-configured metadata for a model under a provider (Amendment A).
+type UserModelEntry struct {
+	ContextWindow int     `json:"context_window,omitempty"`
+	PriceIn       float64 `json:"price_in,omitempty"`
+	PriceOut      float64 `json:"price_out,omitempty"`
+}
+
+// ModelKey returns the canonical lookup key for provider + model id ("provider/model").
+func ModelKey(provider, model string) string {
+	return strings.ToLower(strings.TrimSpace(provider)) + "/" + strings.ToLower(strings.TrimSpace(model))
+}
+
+// BudgetConfig controls session token and cost budgets (SPEC A-6).
+type BudgetConfig struct {
+	MaxCost   float64 `json:"max_cost,omitempty"`
+	MaxTokens int     `json:"max_tokens,omitempty"`
+}
+
 // Config holds agent configuration parameters across layers.
 type Config struct {
-	Provider           string            `json:"provider,omitempty"`
-	Model              string            `json:"model,omitempty"`
-	BaseURL            string            `json:"base_url,omitempty"`
-	MaxTurns           int               `json:"max_turns,omitempty"`
-	MaxTokens          int               `json:"max_tokens,omitempty"`
-	PermissionMode     string            `json:"permission_mode,omitempty"`
-	WorkspaceRoot      string            `json:"workspace_root,omitempty"`
-	Theme              string            `json:"theme,omitempty"`
-	SystemPrompt       string            `json:"system_prompt,omitempty"`
-	Shell              string            `json:"shell,omitempty"`
-	Sessions           *SessionsConfig   `json:"sessions,omitempty"`
-	Audit              *AuditConfig      `json:"audit,omitempty"`
-	Redaction          *RedactionConfig  `json:"redaction,omitempty"`
-	Bash               *BashConfig       `json:"bash,omitempty"`
-	Providers          []ProviderProfile `json:"providers,omitempty"`
-	IgnoredProjectKeys map[string]string `json:"ignored_project_keys,omitempty"`
-	Warnings           []string          `json:"-"`
+	Provider           string                    `json:"provider,omitempty"`
+	Model              string                    `json:"model,omitempty"`
+	BaseURL            string                    `json:"base_url,omitempty"`
+	MaxTurns           int                       `json:"max_turns,omitempty"`
+	MaxTokens          int                       `json:"max_tokens,omitempty"`
+	PermissionMode     string                    `json:"permission_mode,omitempty"`
+	WorkspaceRoot      string                    `json:"workspace_root,omitempty"`
+	Theme              string                    `json:"theme,omitempty"`
+	SystemPrompt       string                    `json:"system_prompt,omitempty"`
+	Shell              string                    `json:"shell,omitempty"`
+	Sessions           *SessionsConfig           `json:"sessions,omitempty"`
+	Audit              *AuditConfig              `json:"audit,omitempty"`
+	Redaction          *RedactionConfig          `json:"redaction,omitempty"`
+	Bash               *BashConfig               `json:"bash,omitempty"`
+	Context            *ContextConfig            `json:"context,omitempty"`
+	Budget             *BudgetConfig             `json:"budget,omitempty"`
+	Providers          []ProviderProfile         `json:"providers,omitempty"`
+	Models             map[string]UserModelEntry `json:"models,omitempty"`
+	IgnoredProjectKeys map[string]string         `json:"ignored_project_keys,omitempty"`
+	Warnings           []string                  `json:"-"`
 	// baseURLRank records which layer set BaseURL so OPENAI_BASE_URL cannot
 	// override FORGE_BASE_URL or a flag, and is applied only for compatible providers.
 	baseURLRank int
@@ -161,6 +193,10 @@ type LoadOptions struct {
 	AuditRequired       *bool
 	SessionsEnabled     *bool
 	RedactionToolOutput *bool
+	NoAutoCompact       *bool
+	ContextWindow       int
+	MaxCost             float64
+	MaxTokensBudget     int
 }
 
 // DefaultModelForProvider returns the sensible default model ID for a given provider.
@@ -183,6 +219,7 @@ func DefaultModelForProvider(p string) string {
 
 // DefaultConfig returns sensible hardcoded defaults.
 func DefaultConfig() Config {
+	autoCompact := true
 	return Config{
 		Provider:       "anthropic",
 		Model:          "claude-sonnet-5-5",
@@ -191,6 +228,19 @@ func DefaultConfig() Config {
 		PermissionMode: "ask",
 		WorkspaceRoot:  ".",
 		Theme:          "dark",
+		Context: &ContextConfig{
+			AutoCompact:        &autoCompact,
+			Window:             0,
+			Tier1Threshold:     0.60,
+			Tier2Threshold:     0.80,
+			EmergencyThreshold: 0.92,
+			KeepRecentTurns:    6,
+			SummaryMaxTokens:   1500,
+		},
+		Budget: &BudgetConfig{
+			MaxCost:   0,
+			MaxTokens: 0,
+		},
 		// SystemPrompt stays empty. The CLI always builds the security prompt
 		// and appends a user-set system_prompt after it (F-006). A non-empty
 		// default here used to replace that built prompt entirely.
@@ -352,6 +402,16 @@ func mergeProjectFile(dst *Config, path string) error {
 			reason := "session database path and persistence settings can only be configured in user config or CLI flags"
 			dst.IgnoredProjectKeys[k] = reason
 			dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Forbidden key %q in project config %q ignored (%s)", k, path, reason))
+		case "context", "context.auto_compact", "context.window", "context.tier1_threshold",
+			"context.tier2_threshold", "context.emergency_threshold", "context.keep_recent_turns",
+			"context.summary_max_tokens", "context.input_price", "context.output_price":
+			reason := "context and compaction settings can only be configured in user config or CLI flags"
+			dst.IgnoredProjectKeys[k] = reason
+			dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Forbidden key %q in project config %q ignored (%s)", k, path, reason))
+		case "budget", "budget.max_cost", "budget.max_tokens", "max_cost":
+			reason := "budget and spend limits can only be configured in user config, environment variables, or CLI flags"
+			dst.IgnoredProjectKeys[k] = reason
+			dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Forbidden key %q in project config %q ignored (%s)", k, path, reason))
 		case "audit", "audit.path", "audit.enabled", "audit.max_mb", "audit.required", "audit_path":
 			reason := "audit log configuration can only be configured in user config or CLI flags"
 			dst.IgnoredProjectKeys[k] = reason
@@ -364,11 +424,21 @@ func mergeProjectFile(dst *Config, path string) error {
 			reason := "database path can only be configured in user config or CLI flags"
 			dst.IgnoredProjectKeys[k] = reason
 			dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Forbidden key %q in project config %q ignored (%s)", k, path, reason))
+		case "models", "price_in", "price_out", "context_window":
+			reason := "model definitions and pricing can only be configured in user config"
+			dst.IgnoredProjectKeys[k] = reason
+			dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Forbidden key %q in project config %q ignored (%s)", k, path, reason))
 		case "endpoint", "url", "proxy":
 			reason := "endpoint URLs can only be configured in user config or CLI flags"
 			dst.IgnoredProjectKeys[k] = reason
 			dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Forbidden key %q in project config %q ignored (%s)", k, path, reason))
 		default:
+			if strings.HasPrefix(kLower, "models.") || strings.HasPrefix(kLower, "models/") {
+				reason := "model definitions and pricing can only be configured in user config"
+				dst.IgnoredProjectKeys[k] = reason
+				dst.Warnings = append(dst.Warnings, fmt.Sprintf("SEC-6: Forbidden key %q in project config %q ignored (%s)", k, path, reason))
+				continue
+			}
 			kUpper := strings.ToUpper(k)
 			if strings.Contains(kUpper, "API_KEY") || strings.Contains(kUpper, "TOKEN") || strings.Contains(kUpper, "SECRET") {
 				reason := "credentials in repository configuration are prohibited"
@@ -436,6 +506,14 @@ func merge(dst *Config, src Config) {
 	if len(src.Providers) > 0 {
 		dst.Providers = append(dst.Providers, src.Providers...)
 	}
+	if len(src.Models) > 0 {
+		if dst.Models == nil {
+			dst.Models = make(map[string]UserModelEntry)
+		}
+		for k, v := range src.Models {
+			dst.Models[strings.ToLower(strings.TrimSpace(k))] = v
+		}
+	}
 	if src.Sessions != nil {
 		c := *src.Sessions
 		c.Enabled = cloneBool(src.Sessions.Enabled)
@@ -457,6 +535,43 @@ func merge(dst *Config, src Config) {
 			c.EnvAllow = append([]string(nil), src.Bash.EnvAllow...)
 		}
 		dst.Bash = &c
+	}
+	if src.Context != nil {
+		if dst.Context == nil {
+			dst.Context = &ContextConfig{}
+		}
+		if src.Context.AutoCompact != nil {
+			dst.Context.AutoCompact = cloneBool(src.Context.AutoCompact)
+		}
+		if src.Context.Window > 0 {
+			dst.Context.Window = src.Context.Window
+		}
+		if src.Context.Tier1Threshold > 0 {
+			dst.Context.Tier1Threshold = src.Context.Tier1Threshold
+		}
+		if src.Context.Tier2Threshold > 0 {
+			dst.Context.Tier2Threshold = src.Context.Tier2Threshold
+		}
+		if src.Context.EmergencyThreshold > 0 {
+			dst.Context.EmergencyThreshold = src.Context.EmergencyThreshold
+		}
+		if src.Context.KeepRecentTurns > 0 {
+			dst.Context.KeepRecentTurns = src.Context.KeepRecentTurns
+		}
+		if src.Context.SummaryMaxTokens > 0 {
+			dst.Context.SummaryMaxTokens = src.Context.SummaryMaxTokens
+		}
+	}
+	if src.Budget != nil {
+		if dst.Budget == nil {
+			dst.Budget = &BudgetConfig{}
+		}
+		if src.Budget.MaxCost > 0 {
+			dst.Budget.MaxCost = src.Budget.MaxCost
+		}
+		if src.Budget.MaxTokens > 0 {
+			dst.Budget.MaxTokens = src.Budget.MaxTokens
+		}
 	}
 }
 
@@ -541,6 +656,30 @@ func applyEnv(dst *Config) {
 		}
 		dst.Sessions.Enabled = cloneBool(&v)
 	}
+	if v := os.Getenv("FORGE_MAX_COST"); v != "" {
+		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil && f >= 0 {
+			if dst.Budget == nil {
+				dst.Budget = &BudgetConfig{}
+			}
+			dst.Budget.MaxCost = f
+		}
+	}
+	if v := os.Getenv("FORGE_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
+			if dst.Budget == nil {
+				dst.Budget = &BudgetConfig{}
+			}
+			dst.Budget.MaxTokens = n
+		}
+	}
+	if v := os.Getenv("FORGE_CONTEXT_WINDOW"); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
+			if dst.Context == nil {
+				dst.Context = &ContextConfig{}
+			}
+			dst.Context.Window = n
+		}
+	}
 }
 
 func applyOptions(dst *Config, opts LoadOptions) {
@@ -603,12 +742,37 @@ func applyOptions(dst *Config, opts LoadOptions) {
 		}
 		dst.Redaction.ToolOutput = cloneBool(opts.RedactionToolOutput)
 	}
+	if opts.NoAutoCompact != nil {
+		if dst.Context == nil {
+			dst.Context = &ContextConfig{}
+		}
+		val := !*opts.NoAutoCompact
+		dst.Context.AutoCompact = &val
+	}
+	if opts.ContextWindow > 0 {
+		if dst.Context == nil {
+			dst.Context = &ContextConfig{}
+		}
+		dst.Context.Window = opts.ContextWindow
+	}
+	if opts.MaxCost > 0 {
+		if dst.Budget == nil {
+			dst.Budget = &BudgetConfig{}
+		}
+		dst.Budget.MaxCost = opts.MaxCost
+	}
+	if opts.MaxTokensBudget > 0 {
+		if dst.Budget == nil {
+			dst.Budget = &BudgetConfig{}
+		}
+		dst.Budget.MaxTokens = opts.MaxTokensBudget
+	}
 }
 
-// SaveUserSelection writes the chosen provider and model into the user config
-// (~/.forge/config.json). Other keys already in that file are kept. The API
-// key is never written here; it stays in the OS keychain.
-func SaveUserSelection(provider, model, baseURL string) error {
+// SaveUserModel writes the chosen provider, model, optional base URL, and optional model metadata
+// (context_window, price_in, price_out) into the user config (~/.forge/config.json).
+// Keyed by provider + model id together (Amendment A).
+func SaveUserModel(provider, model, baseURL string, contextWindow int, priceIn, priceOut float64) error {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	model = strings.TrimSpace(model)
 	baseURL = strings.TrimSpace(baseURL)
@@ -641,10 +805,46 @@ func SaveUserSelection(provider, model, baseURL string) error {
 	} else {
 		raw["base_url"] = baseURL
 	}
+
+	key := ModelKey(provider, model)
+	var modelsMap map[string]any
+	if m, ok := raw["models"].(map[string]any); ok && m != nil {
+		modelsMap = m
+	} else {
+		modelsMap = make(map[string]any)
+	}
+
+	modelEntry := map[string]any{}
+	if existing, ok := modelsMap[key].(map[string]any); ok && existing != nil {
+		for ek, ev := range existing {
+			modelEntry[ek] = ev
+		}
+	}
+	if contextWindow > 0 {
+		modelEntry["context_window"] = contextWindow
+	}
+	if priceIn > 0 {
+		modelEntry["price_in"] = priceIn
+	}
+	if priceOut > 0 {
+		modelEntry["price_out"] = priceOut
+	}
+	if len(modelEntry) > 0 {
+		modelsMap[key] = modelEntry
+		raw["models"] = modelsMap
+	}
+
 	out, err := json.MarshalIndent(raw, "", "  ")
 	if err != nil {
 		return err
 	}
 	out = append(out, '\n')
 	return os.WriteFile(path, out, 0o600)
+}
+
+// SaveUserSelection writes the chosen provider and model into the user config
+// (~/.forge/config.json). Other keys already in that file are kept. The API
+// key is never written here; it stays in the OS keychain.
+func SaveUserSelection(provider, model, baseURL string) error {
+	return SaveUserModel(provider, model, baseURL, 0, 0, 0)
 }

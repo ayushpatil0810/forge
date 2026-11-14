@@ -123,6 +123,20 @@ func TestProjectConfig_HostileKeysTable(t *testing.T) {
 		{"sessions.enabled", false},
 		{"sessions.retention_days", 999},
 		{"sessions.database_path", "/tmp/stolen.db"},
+		{"context.auto_compact", false},
+		{"context.window", 999999},
+		{"context.tier1_threshold", 0.1},
+		{"context.tier2_threshold", 0.2},
+		{"context.emergency_threshold", 0.5},
+		{"context.keep_recent_turns", 1},
+		{"context.summary_max_tokens", 50},
+		{"budget.max_cost", 1000.0},
+		{"budget.max_tokens", 10000000},
+		{"max_cost", 500.0},
+		{"models", map[string]any{"openai/gpt-4o": map[string]any{"context_window": 1000}}},
+		{"context_window", 1000},
+		{"price_in", 0.01},
+		{"price_out", 0.02},
 	}
 
 	for _, hk := range hostileKeys {

@@ -15,7 +15,7 @@
 │ /settings configures a model    /models switches provider                  │  
 ╰────────────────────────────────────────────────────────────────────────────╯  
                                                                                 
-[] [openai/gpt-4o] git:main · Ready · tokens: 0 in / 0 out
+[] [openai/gpt-4o] git:main · ctx ? · Ready · tokens: 0 in / 0 out
 ❯ Ask Forge a question or describe a change... (Enter to send, Alt+Enter for  
 ❯ newline)                                                                    
 ❯                                                                             

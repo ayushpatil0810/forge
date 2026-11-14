@@ -1,6 +1,11 @@
 package agent
 
-import "strings"
+import (
+	"errors"
+	"strings"
+
+	"github.com/ayushpatil0810/forge/internal/llm"
+)
 
 // Canonical error codes for classification and UI display.
 const (
@@ -19,6 +24,13 @@ func ClassifyError(err error) (code string, guidance string) {
 	if err == nil {
 		return "", ""
 	}
+
+	// 1. Typed context-length error from provider adapters (Amendment D)
+	var ctxErr *llm.ContextLengthError
+	if errors.As(err, &ctxErr) {
+		return ErrCodeContextLength, "The conversation exceeded the model's context window. Switch to a higher-context model (e.g. --model) or start a new session."
+	}
+
 	msg := strings.ToLower(err.Error())
 
 	switch {
@@ -30,9 +42,6 @@ func ClassifyError(err error) (code string, guidance string) {
 
 	case strings.Contains(msg, "quota") || strings.Contains(msg, "credit") || strings.Contains(msg, "billing") || strings.Contains(msg, "insufficient"):
 		return ErrCodeQuota, "Your provider account balance or quota is exhausted. Check your provider's billing console."
-
-	case strings.Contains(msg, "context") && (strings.Contains(msg, "length") || strings.Contains(msg, "window") || strings.Contains(msg, "tokens") || strings.Contains(msg, "maximum")):
-		return ErrCodeContextLength, "The conversation exceeded the model's context window. Switch to a higher-context model (e.g. --model) or start a new session."
 
 	case strings.Contains(msg, "dial tcp") || strings.Contains(msg, "connect:") || strings.Contains(msg, "timeout") || strings.Contains(msg, "connection refused") || strings.Contains(msg, "no such host"):
 		return ErrCodeNetwork, "Failed to connect to the model provider. Check your network connection, proxy settings, or DNS."

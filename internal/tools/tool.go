@@ -43,7 +43,16 @@ type Tool interface {
 }
 
 type Registry struct {
-	tools map[string]Tool
+	tools   map[string]Tool
+	tracker *ReadTracker
+}
+
+func (r *Registry) SetTracker(t *ReadTracker) {
+	r.tracker = t
+}
+
+func (r *Registry) Tracker() *ReadTracker {
+	return r.tracker
 }
 
 func NewRegistry(ts ...Tool) *Registry {
