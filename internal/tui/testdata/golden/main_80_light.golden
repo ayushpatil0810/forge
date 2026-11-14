@@ -12,8 +12,8 @@
 │ • Branch:   git:main                                                       │  
 │                                                                            │  
 │ Tab: mode  Ctrl+O: tools  Ctrl+C: quit                                     │  
+│ /settings configures a model    /models switches provider                  │  
 ╰────────────────────────────────────────────────────────────────────────────╯  
-                                                                                
                                                                                 
 [] [openai/gpt-4o] git:main · Ready · tokens: 0 in / 0 out
 ❯ Ask Forge a question or describe a change... (Enter to send, Alt+Enter for  

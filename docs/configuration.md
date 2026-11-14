@@ -25,7 +25,7 @@ Every configuration option supported by Forge:
 | Key | Type | Default | Environment Variable | CLI Flag | Description |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `provider` | `string` | `"anthropic"` | `FORGE_PROVIDER` | `--provider` | Default LLM provider (`anthropic`, `openai`, `gemini`, `mock`). |
-| `model` | `string` | `"claude-sonnet-5-5"` | `FORGE_MODEL` | `--model` | Model identifier to use. Defaults to provider's flagship model. |
+| `model` | `string` | `"claude-sonnet-5-5"` | `FORGE_MODEL` | `--model` | Model ID sent to the provider. First launch asks you to type it. The default applies only when no model has been saved and `--model` / `FORGE_MODEL` are unset. |
 | `base_url` | `string` | `""` | `FORGE_BASE_URL`; `OPENAI_BASE_URL` only for OpenAI-compatible providers | `--base-url`, `--allow-insecure-base-url` | Custom API base URL. `OPENAI_BASE_URL` applies only when the resolved provider is `openai`, `ollama`, `lmstudio`, or a profile whose kind is one of those. A non-loopback `http://` URL is refused unless `--allow-insecure-base-url` is set. Loopback `http://` is always allowed. |
 | `max_turns` | `integer` | `40` | `FORGE_MAX_TURNS` | `--max-turns` | Maximum number of turns in an agent turn loop before stopping. |
 | `max_tokens` | `integer` | `4096` | `FORGE_MAX_TOKENS` | `--max-tokens` | Maximum token generation limit per model request. |
@@ -50,6 +50,14 @@ Every configuration option supported by Forge:
 | `ignored_project_keys` | `object` | `{}` | - | - | Map of untrusted project configuration keys ignored due to security policy. |
 
 ---
+
+## First launch
+
+`forge` with no arguments opens a setup screen when a hosted provider has no saved key. You choose a provider, paste an API key, and type a model ID. Forge writes `provider` and `model` to `~/.forge/config.json`. The key goes to the OS keychain, not this file.
+
+`/settings` repeats that setup. `/models` switches the provider and asks for a model ID. `/model <id>` changes only the model ID.
+
+`forge run` and `forge <prompt>` skip the setup screen. They use the saved provider and model, then the key resolution order in [docs/providers.md](providers.md). Set the provider's environment variable, or run interactive setup once, before a headless command.
 
 ## Inspecting Configuration
 

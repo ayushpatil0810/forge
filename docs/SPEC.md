@@ -126,7 +126,7 @@ Priority: **P0** = MVP, **P1** = v1.0, **P2** = post-v1.
 | L-4 | Gemini implementation                                                                | P1  |
 | L-5 | Ollama / local models                                                                | P1  |
 | L-6 | Model catalog with context window and pricing metadata, used for cost display        | P1  |
-| L-7 | Mid-session model switching (`/model`)                                               | P1  |
+| L-7 | Mid-session model switching. The user types a model ID (`/model <id>`, `/models`, `/settings`) | P1  |
 | L-8 | Prompt caching where the provider supports it                                        | P2  |
 
 ### 3.6 Extensibility

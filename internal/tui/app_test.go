@@ -2,6 +2,8 @@ package tui_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -10,8 +12,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/ayushpatil0810/forge/internal/agent"
+	"github.com/ayushpatil0810/forge/internal/credentials"
 	"github.com/ayushpatil0810/forge/internal/llm/mock"
 	"github.com/ayushpatil0810/forge/internal/tui"
+	"github.com/zalando/go-keyring"
 )
 
 var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
@@ -407,4 +411,118 @@ func TestTUISecurityNoticeOnFirstScreen(t *testing.T) {
 	if !strings.Contains(view, "SEC-6") {
 		t.Fatalf("first screen missing SEC-6 notice:\n%s", view)
 	}
+}
+
+func TestSlashSettingsAndModelsOpenSetup(t *testing.T) {
+	p := mock.New()
+	s := agent.NewLocal(agent.Config{Provider: p})
+	defer s.Close()
+
+	m := tui.New(s, tui.DarkTheme())
+	newM, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = newM.(tui.Model)
+
+	m = typeLine(t, m, "/settings")
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "Welcome to Forge") {
+		t.Fatalf("expected /settings to open setup, got:\n%s", view)
+	}
+	if strings.Contains(view, "ANTHROPIC_API_KEY") {
+		t.Fatalf("setup screen must not ask for an environment variable:\n%s", view)
+	}
+
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = newM.(tui.Model)
+
+	m = typeLine(t, m, "/models")
+	view = stripANSI(m.View())
+	if !strings.Contains(view, "Switch model") {
+		t.Fatalf("expected /models to open the switcher, got:\n%s", view)
+	}
+}
+
+func TestMessageBeforeSetupReopensWizard(t *testing.T) {
+	p := mock.New()
+	s := agent.NewLocal(agent.Config{Provider: p})
+	defer s.Close()
+
+	m := tui.New(s, tui.DarkTheme())
+	m.SetSetupRequired(true)
+	newM, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = newM.(tui.Model)
+
+	m = typeLine(t, m, "hello")
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "Welcome to Forge") {
+		t.Fatalf("expected a message before setup to open the wizard, got:\n%s", view)
+	}
+}
+
+func TestWizardSavesProviderWithoutEnvVar(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Cleanup(func() { _ = keyring.Delete(credentials.ServiceName, "anthropic") })
+
+	p := mock.New()
+	s := agent.NewLocal(agent.Config{Provider: p})
+	defer s.Close()
+
+	m := tui.New(s, tui.DarkTheme())
+	m.SetSetupRequired(true)
+	m.SetWizard(tui.NewWizardState())
+	newM, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = newM.(tui.Model)
+
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newM.(tui.Model)
+	for _, r := range "sk-test-key-1234" {
+		newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = newM.(tui.Model)
+	}
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newM.(tui.Model)
+	modelView := stripANSI(m.View())
+	if strings.Contains(modelView, "Recommended") || strings.Contains(modelView, "claude-sonnet-5-5") {
+		t.Fatalf("model step should ask for an ID, not offer a list:\n%s", modelView)
+	}
+	for _, r := range "claude-opus-4-7" {
+		newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = newM.(tui.Model)
+	}
+	for i := 0; i < 2; i++ {
+		newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m = newM.(tui.Model)
+	}
+
+	view := stripANSI(m.View())
+	if strings.Contains(view, "Welcome to Forge") {
+		t.Fatalf("wizard should close after the model is chosen:\n%s", view)
+	}
+	if strings.Contains(view, "sk-test-key-1234") {
+		t.Fatal("API key leaked into the chat view")
+	}
+	if !strings.Contains(view, "claude-opus-4-7") {
+		t.Fatalf("chat screen should show the model ID the user typed:\n%s", view)
+	}
+
+	data, err := os.ReadFile(filepath.Join(home, ".forge", "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, `"provider": "anthropic"`) || !strings.Contains(text, `"model": "claude-opus-4-7"`) {
+		t.Fatalf("user config was not saved:\n%s", text)
+	}
+	if strings.Contains(text, "sk-test-key") {
+		t.Fatal("API key was written to the config file")
+	}
+}
+
+func typeLine(t *testing.T, m tui.Model, line string) tui.Model {
+	t.Helper()
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(line)})
+	m = newM.(tui.Model)
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	return newM.(tui.Model)
 }

@@ -19,6 +19,9 @@ import (
 )
 
 func isUpdateGolden() bool {
+	if os.Getenv("UPDATE_GOLDEN") == "1" {
+		return true
+	}
 	f := flag.Lookup("update")
 	if f != nil {
 		if b, ok := f.Value.(flag.Getter); ok {

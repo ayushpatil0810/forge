@@ -604,3 +604,47 @@ func applyOptions(dst *Config, opts LoadOptions) {
 		dst.Redaction.ToolOutput = cloneBool(opts.RedactionToolOutput)
 	}
 }
+
+// SaveUserSelection writes the chosen provider and model into the user config
+// (~/.forge/config.json). Other keys already in that file are kept. The API
+// key is never written here; it stays in the OS keychain.
+func SaveUserSelection(provider, model, baseURL string) error {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	model = strings.TrimSpace(model)
+	baseURL = strings.TrimSpace(baseURL)
+	if provider == "" || model == "" {
+		return fmt.Errorf("provider and model are required")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return fmt.Errorf("home directory is not available")
+	}
+	dir := filepath.Join(home, ".forge")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, "config.json")
+	raw := map[string]any{}
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if len(strings.TrimSpace(string(data))) > 0 {
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return fmt.Errorf("reading user config: %w", err)
+		}
+	}
+	raw["provider"] = provider
+	raw["model"] = model
+	if baseURL == "" {
+		delete(raw, "base_url")
+	} else {
+		raw["base_url"] = baseURL
+	}
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return err
+	}
+	out = append(out, '\n')
+	return os.WriteFile(path, out, 0o600)
+}

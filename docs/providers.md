@@ -16,9 +16,32 @@ Forge supports both hosted cloud providers (OpenAI, Anthropic, Google Gemini) an
 
 ---
 
+## First launch
+
+Run `forge` with no arguments. When no hosted provider has a saved key, the terminal opens a setup screen:
+
+1. Choose a provider.
+2. Paste an API key. Hosted keys are saved in the OS keychain. Ollama and LM Studio skip this step.
+3. Type the model ID you want. There is no list to pick from. Use the ID published by your provider, then press Enter.
+
+The choice is saved in `~/.forge/config.json` as `provider` and `model`. The key is not written to that file.
+
+| Command | What it does |
+| :--- | :--- |
+| `/settings` | Run setup again: provider, API key, and model ID. |
+| `/models` | Switch provider and type a model ID. Skips the key when one is already saved. |
+| `/model <id>` | Switch to that model ID without leaving the chat. |
+| `/provider` | Show the supported providers and which one is active. |
+| `/provider <name>` | Switch provider immediately and use that provider's built-in fallback model ID. Use `/model <id>` or `/models` to type a different ID. |
+| `/auth` | Show whether each provider has a saved key. Keys are masked. |
+
+Press Esc on the first setup step to enter the chat without saving a model. The next message opens setup again.
+
+`forge run` and `forge <prompt>` do not open this screen. They use the saved provider, model, and key. A missing key there exits with an error.
+
 ## Credential Management
 
-Forge provides a secure, unified credentials manager (`internal/credentials`) that securely stores and resolves API keys across providers without plain-text exposure in version control.
+Forge stores API keys in the OS keychain. The setup screen and `forge auth login` both write there. Keys are not stored in project config.
 
 ### Resolution Precedence
 
@@ -66,58 +89,30 @@ During `forge auth login`, Forge executes a non-destructive connection probe aga
 
 ---
 
-## Provider Catalogs & Defaults
+## Choosing a model
 
-### 1. OpenAI (Live-Verified)
-- **Default Model**: `gpt-4o`
-- **Catalog**:
-  - `gpt-4o` (128k context, $2.50 / $10.00 per M tokens)
-  - `gpt-4o-mini` (128k context, $0.15 / $0.60 per M tokens)
-  - `o1` (200k context, $15.00 / $60.00 per M tokens)
-  - `o3-mini` (200k context, $1.10 / $4.40 per M tokens)
-- **Documentation**: [OpenAI Model Documentation](https://platform.openai.com/docs/models)
+Type the model ID yourself. Forge does not show a list of models during setup, `/settings`, or `/models`.
 
-### 2. Anthropic (Experimental)
-- **Default Model**: `claude-sonnet-5-5`
-- **Catalog**:
-  - `claude-sonnet-5-5` (1M context, $2.00 / $10.00 per M tokens)
-  - `claude-opus-5-5` (1M context, $4.00 / $20.00 per M tokens)
-  - `claude-haiku-5-5` (1M context, $0.10 / $0.50 per M tokens)
-  - `claude-fable-5-2` (1M context, $8.00 / $40.00 per M tokens)
-- **Documentation**: [Anthropic Models Documentation](https://docs.anthropic.com/en/docs/about-claude/models)
+Copy the ID from the provider that issued your key:
 
-### 3. Google Gemini (Experimental)
-- **Default Model**: `gemini-2.5-pro`
-- **Catalog**:
-  - `gemini-2.5-pro` (1M context, $1.25 / $10.00 per M tokens)
-  - `gemini-2.5-flash` (1M context, $0.30 / $2.50 per M tokens)
-- **Documentation**: [Google AI Gemini Documentation](https://ai.google.dev/gemini-api/docs/models/gemini)
+- OpenAI: [platform.openai.com/docs/models](https://platform.openai.com/docs/models)
+- Anthropic: [docs.anthropic.com](https://docs.anthropic.com/en/docs/about-claude/models)
+- Gemini: [ai.google.dev](https://ai.google.dev/gemini-api/docs/models/gemini)
+- Ollama: the name you pulled, such as the tag printed by `ollama list`
+- LM Studio: the ID shown by the local server
 
-### 4. Ollama (Local)
-- **Default Endpoint**: `http://127.0.0.1:11434`
-- **Default Model**: `llama3.3`
-- **Suggested Models**: `qwen2.5-coder:7b`, `deepseek-r1:7b`
-- **Cost**: Free ($0.00), marked as `(local)` in TUI status bar.
-- **Key**: None needed.
+If the ID matches one Forge already knows, `/model <id>` checks the current conversation against that model's context window. A conversation over the window is refused, and one over 80% of the window shows a warning. Any other ID is accepted. Cost for an unknown ID is shown as `n/a`.
 
-### 5. LM Studio (Local)
-- **Default Endpoint**: `http://127.0.0.1:1234/v1`
-- **Default Model**: `model`
-- **Suggested Models**: `qwen2.5-coder`, `deepseek-coder`
-- **Cost**: Free ($0.00), marked as `(local)` in TUI status bar.
-- **Key**: None needed.
+Until you save a choice, a headless run with no `--model` flag uses a built-in fallback: `claude-sonnet-5-5` for Anthropic, `gpt-4o` for OpenAI, `gemini-2.5-pro` for Gemini, `llama3.3` for Ollama, and `model` for LM Studio. The setup screen does not offer these as a menu.
 
----
+### Local servers
 
-## Dynamic Switching in the TUI
+| Provider | Endpoint Forge uses | API key |
+| :--- | :--- | :--- |
+| Ollama | `http://127.0.0.1:11434` | None |
+| LM Studio | `http://127.0.0.1:1234/v1` | None |
 
-Inside interactive mode, you can switch providers and models without restarting Forge:
-
-- `/provider`: List supported providers and see the active one.
-- `/provider <name>`: Switch active provider (e.g. `/provider ollama`, `/provider openai`). Automatically selects the default model for that provider.
-- `/model`: View the active model, context window, and pricing.
-- `/model <id>`: Switch model (e.g. `/model gpt-4o-mini`). Forge validates conversation token size against the model's context window, alerting if tokens exceed 80% and blocking the switch if tokens exceed 100%. Arbitrary custom models are accepted with cost indicated as `n/a`.
-- `/auth`: Check keychain and authentication status for each provider.
+Local turns show `(local)` in the status bar instead of a dollar cost.
 
 ---
 

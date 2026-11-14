@@ -213,8 +213,8 @@ _Goal: secure credential management, local model detection, first-run wizard, an
 - [x] Local runtime presets for Ollama (`http://127.0.0.1:11434`) and LM Studio (`http://127.0.0.1:1234/v1`) (`L-5`)
 - [x] Cleartext HTTP security warning for non-loopback base URLs
 - [x] Local model quirks: loopback probe (300ms max), "Loading model..." cold-start spinner, single-chunk tool calls, omitted usage handling
-- [x] TUI first-run onboarding wizard (provider selection, key entry/local detect, model selection, demo trigger; skippable via Esc)
-- [x] TUI commands: `/model`, `/provider`, `/auth` with model catalog and context window validation (`L-7`)
+- [x] TUI first-run setup (provider, API key into the OS keychain, model ID typed by the user; no model menu; skippable via Esc)
+- [x] TUI commands: `/settings`, `/models`, `/model <id>`, `/provider`, `/auth`. Known model IDs still get a context-window check (`L-7`)
 - [x] Complete documentation: `docs/providers.md`, `docs/local-models.md`, `README.md`, `docs/configuration.md`, `docs/COVERAGE.md`
 
 **Exit check:** `internal/tui/auth_teatest_test.go:TestSlice8_RealAuthTeatestExitCheck` passes under `-race`, testing local profile setup, hosted profile with fake key masked and asserted absent everywhere (view, golden snapshot, error strings, `forge config`, `forge auth status`, disk files), env override, and logout; awaiting user live run.
@@ -338,6 +338,7 @@ Record anything that deviates from, resolves, or adds to `SPEC.md`. Newest first
 
 | Date       | Decision                                                                 | Reason                                                                             | Spec impact        |
 | ---------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- | ------------------ |
+| 2026-11-14 | First launch asks for a provider, an API key, and a model ID the user types | The setup screen no longer offers a fixed model list, and opening the app does not require an environment variable | `internal/tui/wizard.go`, `docs/providers.md`, `README.md` |
 | 2026-11-13 | Untrusted repository defense: project policy allow rules strictly ignored | Prevents malicious cloned repositories from obtaining automatic pre-approved execution | `internal/policy`, SPEC §3.3 |
 | 2026-11-13 | Command segment splitting and argument hazard safety floor                | Splitting on unquoted delimiters prevents chained bypasses; hazards (`go test -exec`) forced to prompt | `internal/policy`, SPEC §3.3 |
 | 2026-11-13 | Tamper-evident cryptographic per-session SHA-256 hash chains for audit log | Ensures modification, deletion, or reordering of audit records is detected instantly by verify | `internal/audit`, SPEC §3.3 |
