@@ -2,10 +2,13 @@ package agent_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ayushpatil0810/forge/internal/agent"
+	"github.com/ayushpatil0810/forge/internal/audit"
 	"github.com/ayushpatil0810/forge/internal/llm/mock"
 )
 
@@ -186,5 +189,36 @@ func TestBudget_UserCanRaiseLimitWithSetBudget(t *testing.T) {
 	}
 	if len(p.Requests) != 2 {
 		t.Fatalf("expected 2 provider calls after raising budget, got %d", len(p.Requests))
+	}
+}
+
+func TestBudget_SetBudgetAudited(t *testing.T) {
+	tempDir := t.TempDir()
+	auditPath := filepath.Join(tempDir, "audit.jsonl")
+	al := audit.New(audit.Config{
+		Enabled: true,
+		Path:    auditPath,
+		MaxMB:   10,
+	})
+
+	p := mock.New()
+	s := agent.NewLocal(agent.Config{
+		Provider:    p,
+		AuditLogger: al,
+	})
+	defer s.Close()
+
+	s.SetBudget(25.00, 50000)
+
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("failed to read audit log: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "budget_raised") {
+		t.Fatalf("expected audit log to record budget_raised, got:\n%s", content)
+	}
+	if !strings.Contains(content, "max_cost: $25.00") || !strings.Contains(content, "max_tokens: 50000") {
+		t.Fatalf("expected audit log to contain budget amounts, got:\n%s", content)
 	}
 }

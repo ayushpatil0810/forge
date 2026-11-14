@@ -779,6 +779,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if err != nil {
 							m.items = append(m.items, errorMessage{text: fmt.Sprintf("undo failed: %v", err)})
 						} else {
+							_ = m.session.UncompactAfter(target.Timestamp)
 							m.items = append(m.items, systemMessage{text: fmt.Sprintf("Restored workspace to checkpoint %s (%s)", info.ID, target.Message)})
 						}
 					}
@@ -803,6 +804,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if err != nil {
 							m.items = append(m.items, errorMessage{text: fmt.Sprintf("restore failed: %v", err)})
 						} else {
+							_ = m.session.UncompactAfter(info.Timestamp)
 							m.items = append(m.items, systemMessage{text: fmt.Sprintf("Restored workspace to checkpoint %s", info.ID)})
 						}
 					}

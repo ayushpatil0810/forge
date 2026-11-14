@@ -330,6 +330,7 @@ func (s *Store) DeleteSession(ctx context.Context, id string) error {
 	_, _ = db.ExecContext(ctx, "DELETE FROM tool_calls WHERE message_id IN (SELECT id FROM messages WHERE session_id = ?)", id)
 	_, _ = db.ExecContext(ctx, "DELETE FROM checkpoints WHERE session_id = ?", id)
 	_, _ = db.ExecContext(ctx, "DELETE FROM usage WHERE session_id = ?", id)
+	_, _ = db.ExecContext(ctx, "DELETE FROM compactions WHERE session_id = ?", id)
 	_, _ = db.ExecContext(ctx, "DELETE FROM messages WHERE session_id = ?", id)
 	res, err := db.ExecContext(ctx, "DELETE FROM sessions WHERE id = ?", id)
 	if err != nil {
@@ -563,7 +564,7 @@ func (s *Store) GetUsage(ctx context.Context, sessionID string) ([]UsageRecord, 
 	return usages, rows.Err()
 }
 
-// SaveCompaction stores a context compaction record.
+// SaveCompaction stores a context compaction record within a database transaction.
 func (s *Store) SaveCompaction(ctx context.Context, c CompactionRecord) error {
 	db, err := s.Open()
 	if err != nil {
@@ -574,9 +575,17 @@ func (s *Store) SaveCompaction(ctx context.Context, c CompactionRecord) error {
 		createdAt = time.Now().UTC()
 	}
 
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting compaction transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
 	query := `INSERT INTO compactions (id, session_id, tier, summary, first_message_id, last_message_id, tokens_before, tokens_after, created_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	_, err = db.ExecContext(ctx, query,
+	_, err = tx.ExecContext(ctx, query,
 		c.ID,
 		c.SessionID,
 		c.Tier,
@@ -588,9 +597,33 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		createdAt,
 	)
 	if err != nil {
-		return fmt.Errorf("saving compaction: %w", err)
+		return fmt.Errorf("saving compaction in transaction: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing compaction transaction: %w", err)
 	}
 	return nil
+}
+
+// DiscardCompactionsAfter deletes all compaction records for a session created after the specified timestamp.
+func (s *Store) DiscardCompactionsAfter(ctx context.Context, sessionID string, after time.Time) error {
+	db, err := s.Open()
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting discard transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	_, err = tx.ExecContext(ctx, "DELETE FROM compactions WHERE session_id = ? AND created_at > ?", sessionID, after)
+	if err != nil {
+		return fmt.Errorf("deleting compactions after %v: %w", after, err)
+	}
+	return tx.Commit()
 }
 
 // GetCompactions retrieves all compaction records for a session in chronological order.

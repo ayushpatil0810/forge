@@ -130,3 +130,60 @@ func TestSessionPicker_Empty(t *testing.T) {
 		t.Fatalf("expected empty message, got:\n%s", out)
 	}
 }
+
+func TestSessionPicker_TimeFormatting24HourBoundary(t *testing.T) {
+	fixedNow := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	styles := tui.NewStyles(tui.DarkTheme())
+
+	tests := []struct {
+		name      string
+		updatedAt time.Time
+		wantTime  string
+	}{
+		{
+			name:      "inside 24h boundary (10 minutes ago)",
+			updatedAt: fixedNow.Add(-10 * time.Minute),
+			wantTime:  "11:50:00",
+		},
+		{
+			name:      "inside 24h boundary (23 hours 59 minutes ago)",
+			updatedAt: fixedNow.Add(-23*time.Hour - 59*time.Minute),
+			wantTime:  "12:01:00",
+		},
+		{
+			name:      "outside 24h boundary (exactly 24 hours ago)",
+			updatedAt: fixedNow.Add(-24 * time.Hour),
+			wantTime:  "Nov 14 12:00",
+		},
+		{
+			name:      "outside 24h boundary (48 hours ago)",
+			updatedAt: fixedNow.Add(-48 * time.Hour),
+			wantTime:  "Nov 13 12:00",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := []session.SessionSummary{
+				{
+					ID:           "s_boundary_test",
+					Workspace:    "/workspace",
+					Provider:     "anthropic",
+					Model:        "claude-sonnet-5-5",
+					Title:        "Boundary test session",
+					CreatedAt:    tt.updatedAt.Add(-1 * time.Hour),
+					UpdatedAt:    tt.updatedAt,
+					MessageCount: 2,
+					TotalCost:    0.01,
+				},
+			}
+			picker := tui.NewSessionPicker(s)
+			picker.NowFunc = func() time.Time { return fixedNow }
+
+			rendered := stripANSI(picker.Render(120, styles))
+			if !strings.Contains(rendered, tt.wantTime) {
+				t.Fatalf("expected rendered output to contain %q, got:\n%s", tt.wantTime, rendered)
+			}
+		})
+	}
+}

@@ -108,6 +108,7 @@ func TestUserRepoUntouched(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	mgr.LockTimeout = 45 * time.Second
 
 	// Take checkpoint
 	cp, err := mgr.Create(context.Background(), "forge snapshot")
@@ -144,6 +145,7 @@ func TestNonGitWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	mgr.LockTimeout = 45 * time.Second
 
 	cp1, err := mgr.Create(context.Background(), "non-git initial")
 	if err != nil {
@@ -178,6 +180,7 @@ func TestCRLFAndBOMPreservation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	mgr.LockTimeout = 45 * time.Second
 
 	cp, err := mgr.Create(context.Background(), "crlf and bom")
 	if err != nil {
@@ -212,6 +215,7 @@ func TestSizeCapSkip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	mgr.LockTimeout = 45 * time.Second
 	mgr.MaxFileSize = 1024 // 1 KB cap for test
 
 	smallFile := filepath.Join(ws, "small.txt")
@@ -257,6 +261,7 @@ func TestSecretExclusion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	mgr.LockTimeout = 45 * time.Second
 
 	cp, err := mgr.Create(context.Background(), "secrets test")
 	if err != nil {
@@ -330,6 +335,7 @@ func TestConcurrentLockingSubprocesses(t *testing.T) {
 			fmt.Fprintf(os.Stderr, "New failed: %v\n", err)
 			os.Exit(1)
 		}
+		mgr.LockTimeout = 45 * time.Second
 		for round := 0; round < 2; round++ {
 			target := filepath.Join(ws, fmt.Sprintf("proc_%s_round_%d.txt", procID, round))
 			if err := os.WriteFile(target, []byte(fmt.Sprintf("proc %s round %d time %d\n", procID, round, time.Now().UnixNano())), 0644); err != nil {
@@ -353,6 +359,7 @@ func TestConcurrentLockingSubprocesses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	mgr.LockTimeout = 45 * time.Second
 
 	numProcs := 3
 	var wg sync.WaitGroup
@@ -421,6 +428,7 @@ func TestCheckpoint_NoNewWorkspaceFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	mgr.LockTimeout = 45 * time.Second
 
 	// 1. Create checkpoint
 	cp, err := mgr.Create(context.Background(), "baseline")
@@ -470,6 +478,7 @@ func TestCheckpoint_Sub232Degradation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	mgr.LockTimeout = 45 * time.Second
 
 	_, err = mgr.Create(context.Background(), "test old git")
 	if err == nil {

@@ -170,3 +170,32 @@ func TestTUI_ModelSwitch_ApproachingWindowWarning(t *testing.T) {
 		t.Fatalf("expected forced switch to succeed, got:\n%s", viewForced)
 	}
 }
+
+func TestTUI_Command_Compact(t *testing.T) {
+	p := mock.New(
+		mock.Turn{
+			mock.Text("Summary of prior conversation..."),
+			mock.Usage(50, 10),
+		},
+	)
+	s := agent.NewLocal(agent.Config{
+		Provider:      p,
+		ContextWindow: 100000,
+	})
+	defer s.Close()
+
+	m := New(s, DarkTheme())
+	newM, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = newM.(Model)
+
+	m.textarea.SetValue("/compact focus on bug fixes")
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newM.(Model)
+
+	if m.activityLabel != "Compacting context..." {
+		t.Fatalf("expected activityLabel 'Compacting context...', got %q", m.activityLabel)
+	}
+	if !m.isStreaming {
+		t.Fatal("expected isStreaming to be true while compaction runs")
+	}
+}

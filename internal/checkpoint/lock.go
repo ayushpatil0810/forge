@@ -37,6 +37,9 @@ func isLockHeldError(err error) bool {
 // It retries until the timeout expires or the context is cancelled.
 // If an existing lock file is stale (> 30s old), it is automatically cleaned up.
 func acquireLock(ctx context.Context, lockPath string, timeout time.Duration) (*fileLock, error) {
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0700); err != nil {
+		return nil, fmt.Errorf("creating lock directory: %w", err)
+	}
 	deadline := time.Now().Add(timeout)
 	for {
 		// Attempt atomic exclusive creation
@@ -57,12 +60,16 @@ func acquireLock(ctx context.Context, lockPath string, timeout time.Duration) (*
 					_ = f2.Sync()
 					return &fileLock{path: lockPath, file: f2}, nil
 				}
+				if !isLockHeldError(err2) {
+					return nil, fmt.Errorf("creating lock file: %w", err2)
+				}
+			} else {
+				return nil, fmt.Errorf("creating lock file: %w", err)
 			}
-			return nil, fmt.Errorf("creating lock file: %w", err)
 		}
 
-		// Lock exists: check if stale (> 30s)
-		if isLockStale(lockPath, 30*time.Second) {
+		// Lock exists: check if stale (> 60s)
+		if isLockStale(lockPath, 60*time.Second) {
 			_ = os.Remove(lockPath)
 			continue
 		}

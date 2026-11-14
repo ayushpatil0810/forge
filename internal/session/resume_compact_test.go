@@ -97,3 +97,64 @@ func TestResumeRebuildsCompactedView(t *testing.T) {
 		t.Fatalf("expected all 8 messages stored in database (never deleted), got %d", len(dbMsgs))
 	}
 }
+
+func TestStore_DiscardCompactionsAfter(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "discard_compact_test.db")
+
+	store, err := session.NewStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	sessID := "s_discard_compact"
+	_ = store.CreateSession(ctx, session.SessionRecord{
+		ID:        sessID,
+		Workspace: tempDir,
+		Provider:  "anthropic",
+		Model:     "claude-sonnet-5-5",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	})
+
+	baseTime := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
+	_ = store.SaveCompaction(ctx, session.CompactionRecord{
+		ID:             "c_early",
+		SessionID:      sessID,
+		Tier:           1,
+		Summary:        "Early compaction",
+		FirstMessageID: "m1",
+		LastMessageID:  "m2",
+		CreatedAt:      baseTime.Add(10 * time.Minute),
+	})
+	_ = store.SaveCompaction(ctx, session.CompactionRecord{
+		ID:             "c_late",
+		SessionID:      sessID,
+		Tier:           2,
+		Summary:        "Late compaction",
+		FirstMessageID: "m1",
+		LastMessageID:  "m4",
+		CreatedAt:      baseTime.Add(30 * time.Minute),
+	})
+
+	list, err := store.GetCompactions(ctx, sessID)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("expected 2 compactions before discard, got %d (err: %v)", len(list), err)
+	}
+
+	// Discard compactions after baseTime + 20 minutes (should remove c_late, keep c_early)
+	cutoff := baseTime.Add(20 * time.Minute)
+	if err := store.DiscardCompactionsAfter(ctx, sessID, cutoff); err != nil {
+		t.Fatalf("DiscardCompactionsAfter failed: %v", err)
+	}
+
+	remaining, err := store.GetCompactions(ctx, sessID)
+	if err != nil || len(remaining) != 1 {
+		t.Fatalf("expected 1 compaction after discard, got %d (err: %v)", len(remaining), err)
+	}
+	if remaining[0].ID != "c_early" {
+		t.Fatalf("expected c_early remaining, got %q", remaining[0].ID)
+	}
+}
