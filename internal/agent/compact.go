@@ -67,11 +67,12 @@ func ExtractDeterministicFacts(history []llm.Message, boundary int) string {
 	toolCallMap := make(map[string]llm.ToolCall)
 	toolResultMap := make(map[string]llm.Message)
 	for _, m := range slice {
-		if m.Role == llm.RoleAssistant {
+		switch m.Role {
+		case llm.RoleAssistant:
 			for _, tc := range m.ToolCalls {
 				toolCallMap[tc.ID] = tc
 			}
-		} else if m.Role == llm.RoleTool {
+		case llm.RoleTool:
 			toolResultMap[m.ToolCallID] = m
 		}
 	}
@@ -443,10 +444,10 @@ func GenerateSummary(ctx context.Context, p llm.Provider, model string, history 
 		case llm.RoleAssistant:
 			sb.WriteString("[Assistant]: " + m.Text + "\n")
 			for _, tc := range m.ToolCalls {
-				sb.WriteString(fmt.Sprintf("[Tool Call %s (%s)]: %s\n", tc.ID, tc.Name, string(tc.Input)))
+				fmt.Fprintf(&sb, "[Tool Call %s (%s)]: %s\n", tc.ID, tc.Name, string(tc.Input))
 			}
 		case llm.RoleTool:
-			sb.WriteString(fmt.Sprintf("[Tool Result %s]: %s\n", m.ToolCallID, m.Text))
+			fmt.Fprintf(&sb, "[Tool Result %s]: %s\n", m.ToolCallID, m.Text)
 		}
 	}
 

@@ -20,7 +20,7 @@ func TestCompactionSchemaMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create fresh store: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	ctx := context.Background()
 	sessID := "s_compaction_test"
@@ -79,17 +79,17 @@ CREATE TABLE checkpoints (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, turn_in
 CREATE TABLE usage (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, model TEXT NOT NULL, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, cost REAL NOT NULL, created_at TIMESTAMP NOT NULL);
 `)
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		t.Fatal(err)
 	}
-	db.Close()
+	_ = db.Close()
 
 	// Opening with NewStore should migrate from V1 to V2
 	store, err := session.NewStore(dbPath)
 	if err != nil {
 		t.Fatalf("failed to open and migrate V1 database: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	ctx := context.Background()
 	sessID := "s_upgrade_test"
@@ -130,7 +130,7 @@ func TestCompactionSchemaRefusesNewer(t *testing.T) {
 CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TIMESTAMP NOT NULL);
 INSERT INTO schema_version (version, applied_at) VALUES (99, CURRENT_TIMESTAMP);
 `)
-	db.Close()
+	_ = db.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ INSERT INTO schema_version (version, applied_at) VALUES (99, CURRENT_TIMESTAMP);
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	_, err = store.Open()
 	if err == nil {

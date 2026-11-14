@@ -34,7 +34,7 @@ func TestScripted50TurnConversation_CrossingTiers(t *testing.T) {
 	if _, err := store.Open(); err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	ctx := context.Background()
 	sessionID := session.GenerateSessionID()
@@ -75,7 +75,7 @@ func TestScripted50TurnConversation_CrossingTiers(t *testing.T) {
 				reqChars += len(tc.Name) + len(tc.Input)
 			}
 		}
-		inTok := int(float64(reqChars) * 0.6)
+		inTok := int(float64(reqChars) * 0.85)
 		if inTok < 100 {
 			inTok = 100
 		}

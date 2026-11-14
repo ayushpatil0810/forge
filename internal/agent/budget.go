@@ -92,13 +92,7 @@ func (b *BudgetTracker) RecordUsage(inputTokens, outputTokens int, cost float64,
 		}
 	}
 
-	exceeded := false
-	if b.maxCost > 0 && b.runCost >= b.maxCost {
-		exceeded = true
-	}
-	if b.maxTokens > 0 && totalTokens >= b.maxTokens {
-		exceeded = true
-	}
+	exceeded := (b.maxCost > 0 && b.runCost >= b.maxCost) || (b.maxTokens > 0 && totalTokens >= b.maxTokens)
 
 	return exceeded, warnMsg
 }

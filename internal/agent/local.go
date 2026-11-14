@@ -51,10 +51,7 @@ func NewLocal(cfg Config) Session {
 	if cfg.Tools == nil {
 		cfg.Tools = tools.NewRegistry()
 	}
-	autoCompact := true
-	if cfg.NoAutoCompact {
-		autoCompact = false
-	}
+	autoCompact := !cfg.NoAutoCompact
 	id := cfg.ID
 	if id == "" {
 		id = fmt.Sprintf("s_%d", time.Now().UnixNano())

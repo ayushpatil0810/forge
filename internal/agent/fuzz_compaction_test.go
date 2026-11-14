@@ -145,6 +145,8 @@ func TestCompactionRandomizedPropertyChecks(t *testing.T) {
 			compactions = append(compactions, t1Record)
 		}
 
+		origLen := len(history)
+
 		// Build model view
 		view := agent.BuildModelView(history, compactions)
 
@@ -157,11 +159,12 @@ func TestCompactionRandomizedPropertyChecks(t *testing.T) {
 		// Property Assertion 2: No orphan tool results
 		toolCallsSeen := make(map[string]bool)
 		for _, m := range view {
-			if m.Role == llm.RoleAssistant {
+			switch m.Role {
+			case llm.RoleAssistant:
 				for _, tc := range m.ToolCalls {
 					toolCallsSeen[tc.ID] = true
 				}
-			} else if m.Role == llm.RoleTool {
+			case llm.RoleTool:
 				if !toolCallsSeen[m.ToolCallID] {
 					t.Fatalf("iter %d: orphan tool result detected for ID %q", iter, m.ToolCallID)
 				}
@@ -169,8 +172,8 @@ func TestCompactionRandomizedPropertyChecks(t *testing.T) {
 		}
 
 		// Property Assertion 3: History slice was never altered
-		if len(history) != len(generateRandomHistory(rand.New(rand.NewSource(42)), numTurns)) {
-			// Length check against re-generated history with same seed
+		if len(history) != origLen {
+			t.Fatalf("iter %d: history length modified: expected %d, got %d", iter, origLen, len(history))
 		}
 	}
 }
