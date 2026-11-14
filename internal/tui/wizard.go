@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/ayushpatil0810/forge/internal/credentials"
@@ -19,13 +20,17 @@ const (
 )
 
 type WizardState struct {
-	Step          wizardStep
-	ProviderIndex int
-	Providers     []string
-	KeyInput      string
-	DetectedLocal string
-	ModelInput    string
-	StatusMsg     string
+	Step               wizardStep
+	ProviderIndex      int
+	Providers          []string
+	KeyInput           string
+	DetectedLocal      string
+	ModelInput         string
+	ContextWindowInput string
+	PriceInInput       string
+	PriceOutInput      string
+	ActiveField        int // 0: ModelInput, 1: ContextWindowInput, 2: PriceInInput, 3: PriceOutInput
+	StatusMsg          string
 	// switchOnly skips the key step when a key is already stored.
 	switchOnly bool
 }
@@ -130,14 +135,36 @@ func (w *WizardState) Update(msg tea.Msg) (bool, tea.Cmd) {
 
 	if w.Step == wizardStepModel {
 		switch keyMsg.String() {
+		case "tab":
+			w.ActiveField = (w.ActiveField + 1) % 4
+			return false, nil
+		case "shift+tab":
+			w.ActiveField = (w.ActiveField + 3) % 4
+			return false, nil
 		case "backspace":
-			if len(w.ModelInput) > 0 {
-				w.ModelInput = w.ModelInput[:len(w.ModelInput)-1]
+			switch w.ActiveField {
+			case 0:
+				if len(w.ModelInput) > 0 {
+					w.ModelInput = w.ModelInput[:len(w.ModelInput)-1]
+				}
+			case 1:
+				if len(w.ContextWindowInput) > 0 {
+					w.ContextWindowInput = w.ContextWindowInput[:len(w.ContextWindowInput)-1]
+				}
+			case 2:
+				if len(w.PriceInInput) > 0 {
+					w.PriceInInput = w.PriceInInput[:len(w.PriceInInput)-1]
+				}
+			case 3:
+				if len(w.PriceOutInput) > 0 {
+					w.PriceOutInput = w.PriceOutInput[:len(w.PriceOutInput)-1]
+				}
 			}
 			return false, nil
 		case "enter":
 			if strings.TrimSpace(w.ModelInput) == "" {
 				w.StatusMsg = "Enter the model ID you want to use."
+				w.ActiveField = 0
 				return false, nil
 			}
 			w.ModelInput = strings.TrimSpace(w.ModelInput)
@@ -146,7 +173,16 @@ func (w *WizardState) Update(msg tea.Msg) (bool, tea.Cmd) {
 			return false, nil
 		default:
 			if len(keyMsg.Runes) > 0 {
-				w.ModelInput += string(keyMsg.Runes)
+				switch w.ActiveField {
+				case 0:
+					w.ModelInput += string(keyMsg.Runes)
+				case 1:
+					w.ContextWindowInput += string(keyMsg.Runes)
+				case 2:
+					w.PriceInInput += string(keyMsg.Runes)
+				case 3:
+					w.PriceOutInput += string(keyMsg.Runes)
+				}
 				w.StatusMsg = ""
 			}
 			return false, nil
@@ -228,6 +264,21 @@ func (w *WizardState) SelectedModel() string {
 	return strings.TrimSpace(w.ModelInput)
 }
 
+func (w *WizardState) ContextWindow() int {
+	cw, _ := strconv.Atoi(strings.TrimSpace(w.ContextWindowInput))
+	return cw
+}
+
+func (w *WizardState) PriceIn() float64 {
+	pi, _ := strconv.ParseFloat(strings.TrimSpace(w.PriceInInput), 64)
+	return pi
+}
+
+func (w *WizardState) PriceOut() float64 {
+	po, _ := strconv.ParseFloat(strings.TrimSpace(w.PriceOutInput), 64)
+	return po
+}
+
 func (w *WizardState) Render(width int, styles Styles) string {
 	boxWidth := width - 6
 	if boxWidth < 50 {
@@ -294,17 +345,46 @@ func (w *WizardState) Render(width int, styles Styles) string {
 
 	case wizardStepModel:
 		p := w.CurrentProvider()
-		fmt.Fprintf(&sb, "Enter the model ID for %s:\n\n", strings.ToUpper(p))
-		shown := w.ModelInput
-		if shown == "" {
-			shown = "(type the model ID)"
+		fmt.Fprintf(&sb, "Enter model configuration for %s:\n\n", strings.ToUpper(p))
+		sb.WriteString(styles.SystemInfo.Render("used for cost display and for warning before the context fills; leave blank if unsure") + "\n\n")
+
+		mShown := w.ModelInput
+		if mShown == "" {
+			mShown = "(type model ID)"
 		}
-		sb.WriteString(styles.BorderBox.Render("Model: "+shown) + "\n\n")
-		sb.WriteString(styles.SystemInfo.Render("Use the exact model ID from your provider. Forge does not keep a model list.") + "\n\n")
+		cwShown := w.ContextWindowInput
+		if cwShown == "" {
+			cwShown = "(optional, e.g. 128000)"
+		}
+		piShown := w.PriceInInput
+		if piShown == "" {
+			piShown = "(optional, e.g. 2.50)"
+		}
+		poShown := w.PriceOutInput
+		if poShown == "" {
+			poShown = "(optional, e.g. 10.00)"
+		}
+
+		f0, f1, f2, f3 := "  ", "  ", "  ", "  "
+		switch w.ActiveField {
+		case 0:
+			f0 = "❯ "
+		case 1:
+			f1 = "❯ "
+		case 2:
+			f2 = "❯ "
+		case 3:
+			f3 = "❯ "
+		}
+
+		configBox := fmt.Sprintf("%sModel ID: %s\n%sContext window: %s\n%sInput price ($/M): %s\n%sOutput price ($/M): %s",
+			f0, mShown, f1, cwShown, f2, piShown, f3, poShown)
+		sb.WriteString(styles.BorderBox.Render(configBox) + "\n\n")
+
 		if w.StatusMsg != "" {
 			sb.WriteString(styles.ErrorText.Render(w.StatusMsg) + "\n\n")
 		}
-		sb.WriteString(styles.UserPrompt.Render("Press Enter to use this model."))
+		sb.WriteString(styles.UserPrompt.Render("Press Enter to use this model, or Tab to edit optional fields."))
 
 	case wizardStepDone:
 		done := "✓ Setup completed successfully!"
@@ -313,7 +393,20 @@ func (w *WizardState) Render(width int, styles Styles) string {
 		}
 		sb.WriteString(styles.ToolCardSuccess.Render(done) + "\n\n")
 		p := w.CurrentProvider()
-		fmt.Fprintf(&sb, "Active Provider: %s\nModel:           %s\n\n", strings.ToUpper(p), w.SelectedModel())
+		fmt.Fprintf(&sb, "Active Provider: %s\nModel:           %s\n", strings.ToUpper(p), w.SelectedModel())
+		cw := w.ContextWindow()
+		cwText := "unknown"
+		if cw > 0 {
+			cwText = fmt.Sprintf("%d tokens", cw)
+		}
+		fmt.Fprintf(&sb, "Context Window:  %s\n", cwText)
+		pi := w.PriceIn()
+		po := w.PriceOut()
+		if pi > 0 || po > 0 {
+			fmt.Fprintf(&sb, "Prices ($/M):    in $%.2f, out $%.2f\n\n", pi, po)
+		} else {
+			sb.WriteString("Prices ($/M):    unknown\n\n")
+		}
 		sb.WriteString(styles.UserPrompt.Render("• Press Enter to start coding\n• Or press 'd' to run the interactive demo\n"))
 	}
 

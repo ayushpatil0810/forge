@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -177,6 +178,22 @@ type Model struct {
 	setupRequired         bool
 	sessionPicker         *SessionPicker
 	securityNotices       []string
+	contextUsage          agent.ContextUsage
+	maxCostBudget         float64
+	maxTokensBudget       int
+	compactionTokens      int
+	compactionCost        float64
+	pendingModelSwitch    string
+}
+
+func formatTokenCount(n int) string {
+	if n >= 1000000 {
+		return fmt.Sprintf("%.1fM", float64(n)/1000000.0)
+	}
+	if n >= 1000 {
+		return fmt.Sprintf("%dk", n/1000)
+	}
+	return fmt.Sprintf("%d", n)
 }
 
 // New creates a new TUI model bound to a Session.
@@ -198,8 +215,14 @@ func New(s agent.Session, theme Theme) Model {
 	ta.ShowLineNumbers = false
 	sp.Style = NewStyles(theme).ActivityLabel
 
+	var cu agent.ContextUsage
+	if s != nil {
+		cu = s.ContextUsage()
+	}
+
 	m := Model{
 		session:       s,
+		contextUsage:  cu,
 		theme:         theme,
 		styles:        NewStyles(theme),
 		renderer:      NewMarkdownRenderer(theme.GlamourStyle, 80),
@@ -209,6 +232,11 @@ func New(s agent.Session, theme Theme) Model {
 		toolCards:     make(map[string]*ToolCard),
 	}
 	return m
+}
+
+func (m *Model) SetBudget(maxCost float64, maxTokens int) {
+	m.maxCostBudget = maxCost
+	m.maxTokensBudget = maxTokens
 }
 
 func (m *Model) SetProviderInfo(provider, model string) {
@@ -237,6 +265,12 @@ func (m *Model) applyWizardSelection() {
 		return
 	}
 	m.baseURL = baseURLForProvider(m.providerName, m.baseURL)
+	cw := m.wizard.ContextWindow()
+	pi := m.wizard.PriceIn()
+	po := m.wizard.PriceOut()
+	if err := config.SaveUserModel(m.providerName, m.modelName, m.baseURL, cw, pi, po); err != nil {
+		m.items = append(m.items, errorMessage{text: "Could not save model metadata: " + err.Error()})
+	}
 	if err := config.SaveUserSelection(m.providerName, m.modelName, m.baseURL); err != nil {
 		m.items = append(m.items, errorMessage{text: "Could not save model choice: " + err.Error()})
 	}
@@ -789,28 +823,62 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.textarea.Reset()
 				parts := strings.Fields(input)
 				if len(parts) == 1 {
-					m.items = append(m.items, systemMessage{text: fmt.Sprintf("Active model: %s\nType /model <id> and use the exact model ID from your provider.", m.modelName)})
-				} else {
-					targetModel := parts[1]
-					catalog := getModelCatalog(m.providerName)
-					var targetInfo *ModelCatalogItem
-					for _, item := range catalog {
-						if item.ID == targetModel {
-							targetInfo = &item
-							break
+					userCfg, _ := config.Load(config.LoadOptions{})
+					savedCW := "unknown"
+					savedPIn := "unknown"
+					savedPOut := "unknown"
+					var userPI, userPO float64
+					key := config.ModelKey(m.providerName, m.modelName)
+					if userCfg.Models != nil {
+						if entry, ok := userCfg.Models[key]; ok {
+							if entry.ContextWindow > 0 {
+								savedCW = fmt.Sprintf("%d tokens", entry.ContextWindow)
+							}
+							if entry.PriceIn > 0 {
+								userPI = entry.PriceIn
+								savedPIn = fmt.Sprintf("$%.2f / M tokens", userPI)
+							}
+							if entry.PriceOut > 0 {
+								userPO = entry.PriceOut
+								savedPOut = fmt.Sprintf("$%.2f / M tokens", userPO)
+							}
 						}
 					}
-					approxTokens := m.inputTokens + m.outputTokens
-					if targetInfo != nil && targetInfo.ContextWindow > 0 {
-						if approxTokens > targetInfo.ContextWindow {
-							m.items = append(m.items, errorMessage{text: fmt.Sprintf("Cannot switch to model %q: current conversation (~%d tokens) exceeds model context window (%d tokens).", targetModel, approxTokens, targetInfo.ContextWindow)})
+					effectivePrice := llm.ResolvePriceInfo(m.providerName, m.modelName, userPI, userPO)
+
+					msg := fmt.Sprintf("Active model: %s (provider: %s)\nSaved context window: %s\nSaved input price: %s\nSaved output price: %s",
+						m.modelName, m.providerName, savedCW, savedPIn, savedPOut)
+					if effectivePrice.Note != "" {
+						msg += fmt.Sprintf("\nNote: %s", effectivePrice.Note)
+					}
+					msg += "\nType /model <id> and use the exact model ID from your provider."
+					m.items = append(m.items, systemMessage{text: msg})
+				} else {
+					targetModel := parts[1]
+					targetInfo := llm.ResolveContextInfo(m.providerName, targetModel, 0, 0, 0)
+					u := m.session.ContextUsage()
+					approxTokens := u.Used
+					if approxTokens == 0 {
+						approxTokens = m.contextUsage.Used
+					}
+					if approxTokens == 0 {
+						approxTokens = m.inputTokens + m.outputTokens
+					}
+					forced := len(parts) > 2 && parts[2] == "--force"
+					if targetInfo.Known && targetInfo.Window > 0 {
+						if approxTokens > targetInfo.Window {
+							m.items = append(m.items, errorMessage{text: fmt.Sprintf("Cannot switch to model %q: current conversation (~%d tokens) exceeds model context window (%d tokens).", targetModel, approxTokens, targetInfo.Window)})
 							m.updateViewportContent()
 							return m, nil
 						}
-						if approxTokens > targetInfo.ContextWindow*8/10 {
-							m.items = append(m.items, systemMessage{text: fmt.Sprintf("Warning: current conversation (~%d tokens) is approaching model context window (%d tokens).", approxTokens, targetInfo.ContextWindow)})
+						if approxTokens > targetInfo.Window*8/10 && !forced && m.pendingModelSwitch != targetModel {
+							m.pendingModelSwitch = targetModel
+							m.items = append(m.items, systemMessage{text: fmt.Sprintf("Warning: current conversation (~%d tokens) exceeds 80%% of %s's window (%d tokens).\nRun /compact first to compact context, or type /model %s --force to switch anyway.", approxTokens, targetModel, targetInfo.Window, targetModel)})
+							m.updateViewportContent()
+							return m, nil
 						}
 					}
+					m.pendingModelSwitch = ""
 					m.modelName = targetModel
 					credMgr := credentials.NewManager(nil)
 					cred := credMgr.Resolve(m.providerName)
@@ -823,6 +891,83 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.session.SetProvider(p)
 					}
 					m.items = append(m.items, systemMessage{text: fmt.Sprintf("Switched active model to %s.", targetModel)})
+				}
+				m.updateViewportContent()
+				return m, nil
+			}
+
+			if input == "/compact" || strings.HasPrefix(input, "/compact ") {
+				m.items = append(m.items, userMessage{text: input})
+				m.textarea.Reset()
+				focus := strings.TrimSpace(strings.TrimPrefix(input, "/compact"))
+				m.activityLabel = "Compacting context..."
+				m.isStreaming = true
+				m.updateViewportContent()
+				go func() {
+					_ = m.session.Compact(context.Background(), focus)
+				}()
+				return m, nil
+			}
+
+			if input == "/cost" {
+				m.items = append(m.items, userMessage{text: input})
+				m.textarea.Reset()
+				u := m.session.Usage()
+				var sb strings.Builder
+				sb.WriteString("Session Usage & Cost:\n")
+				fmt.Fprintf(&sb, "• Input Tokens:      %d\n", u.InputTokens)
+				fmt.Fprintf(&sb, "• Output Tokens:     %d\n", u.OutputTokens)
+				if u.CompactionTokens > 0 || u.CompactionCost > 0 {
+					fmt.Fprintf(&sb, "• Compaction Tokens: %d\n", u.CompactionTokens)
+					fmt.Fprintf(&sb, "• Compaction Cost:   $%.4f\n", u.CompactionCost)
+				}
+				fmt.Fprintf(&sb, "• Total Tokens:      %d\n", u.InputTokens+u.OutputTokens+u.CompactionTokens)
+				fmt.Fprintf(&sb, "• Total Cost:        $%.4f\n", u.Cost)
+				if m.maxCostBudget > 0 {
+					rem := m.maxCostBudget - u.Cost
+					if rem < 0 {
+						rem = 0
+					}
+					fmt.Fprintf(&sb, "• Cost Budget:       $%.2f (remaining: $%.4f)\n", m.maxCostBudget, rem)
+				}
+				if m.maxTokensBudget > 0 {
+					tot := u.InputTokens + u.OutputTokens + u.CompactionTokens
+					rem := m.maxTokensBudget - tot
+					if rem < 0 {
+						rem = 0
+					}
+					fmt.Fprintf(&sb, "• Token Budget:      %d (remaining: %d)\n", m.maxTokensBudget, rem)
+				}
+				m.items = append(m.items, systemMessage{text: strings.TrimSpace(sb.String())})
+				m.updateViewportContent()
+				return m, nil
+			}
+
+			if input == "/budget" || strings.HasPrefix(input, "/budget ") {
+				m.items = append(m.items, userMessage{text: input})
+				m.textarea.Reset()
+				parts := strings.Fields(input)
+				if len(parts) == 1 {
+					m.items = append(m.items, systemMessage{text: "Usage: /budget <usd-amount or token-count> (e.g. /budget $5.00 or /budget 100000)"})
+				} else {
+					arg := strings.TrimPrefix(parts[1], "$")
+					if val, err := strconv.ParseFloat(arg, 64); err == nil {
+						if strings.Contains(parts[1], ".") || strings.HasPrefix(parts[1], "$") {
+							m.session.SetBudget(val, 0)
+							m.maxCostBudget = val
+							m.items = append(m.items, systemMessage{text: fmt.Sprintf("Cost budget set to $%.2f for this session.", val)})
+						} else if val > 1000 {
+							m.session.SetBudget(0, int(val))
+							m.maxTokensBudget = int(val)
+							m.items = append(m.items, systemMessage{text: fmt.Sprintf("Token budget set to %d tokens for this session.", int(val))})
+						} else {
+							m.session.SetBudget(val, 0)
+							m.maxCostBudget = val
+							m.items = append(m.items, systemMessage{text: fmt.Sprintf("Cost budget set to $%.2f for this session.", val)})
+						}
+					} else {
+						m.items = append(m.items, errorMessage{text: fmt.Sprintf("Invalid budget amount %q", parts[1])})
+					}
 				}
 				m.updateViewportContent()
 				return m, nil
@@ -1039,8 +1184,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case agent.EventNotice:
-			if m.auditWarning == "" && ev.Notice != "" {
-				m.auditWarning = ev.Notice
+			if ev.Notice != "" {
+				if m.auditWarning == "" && strings.Contains(strings.ToLower(ev.Notice), "audit") {
+					m.auditWarning = ev.Notice
+				} else {
+					m.items = append(m.items, systemMessage{text: ev.Notice})
+				}
 				m.updateViewportContent()
 			}
 
@@ -1093,6 +1242,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.inputTokens = ev.Usage.InputTokens
 				m.outputTokens = ev.Usage.OutputTokens
 				m.cost = ev.Usage.Cost
+				m.compactionTokens = ev.Usage.CompactionTokens
+				m.compactionCost = ev.Usage.CompactionCost
 				if m.store != nil && !m.noSession {
 					_ = m.store.SaveUsage(context.Background(), session.UsageRecord{
 						SessionID:    m.session.ID(),
@@ -1105,11 +1256,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+		case agent.EventContextUsageUpdated:
+			if ev.ContextUsage != nil {
+				m.contextUsage = *ev.ContextUsage
+			}
+
+		case agent.EventCompactionStarted:
+			if ev.CompactionStart != nil {
+				m.activityLabel = fmt.Sprintf("Compacting context (tier %d)...", ev.CompactionStart.Tier)
+				m.updateViewportContent()
+			}
+
+		case agent.EventCompactionFinished:
+			if ev.CompactionDone != nil && ev.CompactionDone.OK {
+				line := fmt.Sprintf("Compacted context: %s → %s tokens",
+					formatTokenCount(ev.CompactionDone.TokensBefore),
+					formatTokenCount(ev.CompactionDone.TokensAfter),
+				)
+				m.items = append(m.items, systemMessage{text: line})
+				m.updateViewportContent()
+			}
+
 		case agent.EventDone:
 			m.isStreaming = false
 			m.pendingApproval = nil
 			m.textarea.Focus()
 			m.activityLabel = "Ready"
+			if ev.Done != nil && ev.Done.Reason == "budget_exceeded" {
+				m.activityLabel = "Budget exceeded"
+				m.items = append(m.items, errorMessage{text: fmt.Sprintf("Budget exceeded: spent $%.4f. Use /budget <amount> to raise the budget for this session, or Ctrl+C to quit.", m.cost)})
+			}
 			if m.currentResponse != "" {
 				if ev.Done != nil && ev.Done.Reason == "cancelled" {
 					m.currentResponse += "\n\n*[Interrupted]*"
@@ -1358,15 +1534,28 @@ func (m Model) View() string {
 		branchInfo = fmt.Sprintf("git:%s%s", m.branch, sep)
 	}
 
+	ctxStr := "ctx ?"
+	if m.contextUsage.Known {
+		ctxStr = fmt.Sprintf("ctx %d%%", m.contextUsage.Percent)
+	}
+
+	budgetInfo := ""
+	if m.maxCostBudget > 0 {
+		budgetInfo = fmt.Sprintf("%s$%.2f/$%.2f", sep, m.cost, m.maxCostBudget)
+	} else if m.maxTokensBudget > 0 {
+		toks := m.inputTokens + m.outputTokens + m.compactionTokens
+		budgetInfo = fmt.Sprintf("%s%s/%s tok", sep, formatTokenCount(toks), formatTokenCount(m.maxTokensBudget))
+	}
+
 	if m.isStreaming {
-		status = fmt.Sprintf("%s%s%s%s %s", modeInfo, providerInfo, branchInfo, m.spinner.View(), m.activityLabel)
+		status = fmt.Sprintf("%s%s%s%s%s%s %s", modeInfo, providerInfo, branchInfo, ctxStr, sep, m.spinner.View(), m.activityLabel)
 	} else if m.ctrlCPressed {
 		status = m.styles.ErrorText.Render("Press Ctrl+C again to quit")
 	} else {
 		if m.width < 70 {
-			status = m.styles.StatusBar.Render(fmt.Sprintf("%s%s%s%d/%d%s", modeInfo, m.modelName, sep, m.inputTokens, m.outputTokens, costInfo))
+			status = m.styles.StatusBar.Render(fmt.Sprintf("%s%s%s%s%s%d/%d%s%s", modeInfo, m.modelName, sep, ctxStr, sep, m.inputTokens, m.outputTokens, costInfo, budgetInfo))
 		} else {
-			status = m.styles.StatusBar.Render(fmt.Sprintf("%s%s%s%s%stokens: %d in / %d out%s", modeInfo, providerInfo, branchInfo, m.activityLabel, sep, m.inputTokens, m.outputTokens, costInfo))
+			status = m.styles.StatusBar.Render(fmt.Sprintf("%s%s%s%s%s%s%stokens: %d in / %d out%s%s", modeInfo, providerInfo, branchInfo, ctxStr, sep, m.activityLabel, sep, m.inputTokens, m.outputTokens, costInfo, budgetInfo))
 		}
 	}
 
@@ -1416,52 +1605,4 @@ func (m Model) View() string {
 		m.textarea.View(),
 		help,
 	)
-}
-
-// ModelCatalogItem describes a model's basic properties for TUI display and validation.
-type ModelCatalogItem struct {
-	ID             string
-	ContextWindow  int
-	InputCostPerM  float64
-	OutputCostPerM float64
-}
-
-func getModelCatalog(provider string) []ModelCatalogItem {
-	switch strings.ToLower(provider) {
-	case "anthropic":
-		return []ModelCatalogItem{
-			{ID: "claude-sonnet-5-5", ContextWindow: 1000000, InputCostPerM: 2.00, OutputCostPerM: 10.00},
-			{ID: "claude-opus-5-5", ContextWindow: 1000000, InputCostPerM: 4.00, OutputCostPerM: 20.00},
-			{ID: "claude-haiku-5-5", ContextWindow: 1000000, InputCostPerM: 0.10, OutputCostPerM: 0.50},
-			{ID: "claude-fable-5-2", ContextWindow: 1000000, InputCostPerM: 8.00, OutputCostPerM: 40.00},
-		}
-	case "openai":
-		return []ModelCatalogItem{
-			{ID: "gpt-4o", ContextWindow: 128000, InputCostPerM: 2.50, OutputCostPerM: 10.00},
-			{ID: "gpt-4o-mini", ContextWindow: 128000, InputCostPerM: 0.15, OutputCostPerM: 0.60},
-			{ID: "o1", ContextWindow: 200000, InputCostPerM: 15.00, OutputCostPerM: 60.00},
-			{ID: "o3-mini", ContextWindow: 200000, InputCostPerM: 1.10, OutputCostPerM: 4.40},
-		}
-	case "gemini":
-		return []ModelCatalogItem{
-			{ID: "gemini-2.5-pro", ContextWindow: 1048576, InputCostPerM: 1.25, OutputCostPerM: 10.00},
-			{ID: "gemini-2.5-flash", ContextWindow: 1048576, InputCostPerM: 0.30, OutputCostPerM: 2.50},
-		}
-	case "ollama":
-		return []ModelCatalogItem{
-			{ID: "llama3.3", ContextWindow: 128000, InputCostPerM: 0, OutputCostPerM: 0},
-			{ID: "qwen2.5-coder:7b", ContextWindow: 128000, InputCostPerM: 0, OutputCostPerM: 0},
-			{ID: "deepseek-r1:7b", ContextWindow: 128000, InputCostPerM: 0, OutputCostPerM: 0},
-		}
-	case "lmstudio":
-		return []ModelCatalogItem{
-			{ID: "model", ContextWindow: 128000, InputCostPerM: 0, OutputCostPerM: 0},
-			{ID: "qwen2.5-coder", ContextWindow: 128000, InputCostPerM: 0, OutputCostPerM: 0},
-			{ID: "deepseek-coder", ContextWindow: 128000, InputCostPerM: 0, OutputCostPerM: 0},
-		}
-	default:
-		return []ModelCatalogItem{
-			{ID: config.DefaultModelForProvider(provider), ContextWindow: 128000, InputCostPerM: 0, OutputCostPerM: 0},
-		}
-	}
 }

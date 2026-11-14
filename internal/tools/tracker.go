@@ -40,3 +40,15 @@ func (t *ReadTracker) HasBeenRead(p string) bool {
 	defer t.mu.RUnlock()
 	return t.reads[clean] || t.reads[filepath.ToSlash(clean)]
 }
+
+// UnmarkRead removes a recorded read for p, requiring a fresh read before writes.
+func (t *ReadTracker) UnmarkRead(p string) {
+	if t == nil {
+		return
+	}
+	clean := filepath.Clean(p)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.reads, clean)
+	delete(t.reads, filepath.ToSlash(clean))
+}

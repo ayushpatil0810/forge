@@ -15,6 +15,14 @@ type SessionPicker struct {
 	Sessions []session.SessionSummary
 	Cursor   int
 	Width    int
+	NowFunc  func() time.Time
+}
+
+func (p *SessionPicker) now() time.Time {
+	if p.NowFunc != nil {
+		return p.NowFunc()
+	}
+	return time.Now()
 }
 
 func NewSessionPicker(sessions []session.SessionSummary) *SessionPicker {
@@ -79,7 +87,7 @@ func (p *SessionPicker) Render(width int, styles Styles) string {
 		}
 
 		timeStr := s.UpdatedAt.Format("Jan 02 15:04")
-		if time.Since(s.UpdatedAt) < 24*time.Hour {
+		if p.now().Sub(s.UpdatedAt) < 24*time.Hour {
 			timeStr = s.UpdatedAt.Format("15:04:05")
 		}
 

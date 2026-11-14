@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ayushpatil0810/forge/internal/agent"
 	"github.com/ayushpatil0810/forge/internal/llm"
 )
 
@@ -85,6 +86,7 @@ type ResumedSessionData struct {
 	ToolCallsByMsg map[string][]ToolCallRecord
 	Checkpoints    []CheckpointRecord
 	Usage          []UsageRecord
+	Compactions    []CompactionRecord
 	LLMMessages    []llm.Message
 	TotalCost      float64
 	TotalTokens    int
@@ -115,6 +117,7 @@ func LoadResumedSession(ctx context.Context, store *Store, sessionID string) (*R
 
 	checkpoints, _ := store.GetCheckpoints(ctx, sessionID)
 	usageList, _ := store.GetUsage(ctx, sessionID)
+	compactions, _ := store.GetCompactions(ctx, sessionID)
 
 	var totalCost float64
 	var totalTokens int
@@ -127,11 +130,11 @@ func LoadResumedSession(ctx context.Context, store *Store, sessionID string) (*R
 	msgs = RepairInterruptedToolCalls(msgs, toolCallsMap)
 
 	// Build provider-neutral llm.Messages for the LLM request history
-	llmMsgs := make([]llm.Message, 0, len(msgs)+1)
+	rawLLMMsgs := make([]llm.Message, 0, len(msgs))
 	for _, m := range msgs {
 		switch m.Role {
 		case "user":
-			llmMsgs = append(llmMsgs, llm.Message{Role: llm.RoleUser, Text: m.Content})
+			rawLLMMsgs = append(rawLLMMsgs, llm.Message{ID: m.ID, Role: llm.RoleUser, Text: m.Content})
 		case "assistant":
 			var tcs []llm.ToolCall
 			if records, ok := toolCallsMap[m.ID]; ok {
@@ -143,18 +146,26 @@ func LoadResumedSession(ctx context.Context, store *Store, sessionID string) (*R
 					})
 				}
 			}
-			llmMsgs = append(llmMsgs, llm.Message{
+			rawLLMMsgs = append(rawLLMMsgs, llm.Message{
+				ID:        m.ID,
 				Role:      llm.RoleAssistant,
 				Text:      m.Content,
 				ToolCalls: tcs,
 			})
 		case "tool":
-			llmMsgs = append(llmMsgs, llm.Message{
+			rawLLMMsgs = append(rawLLMMsgs, llm.Message{
+				ID:         m.ID,
 				Role:       llm.RoleTool,
 				Text:       m.Content,
 				ToolCallID: m.ToolCallID,
 			})
 		}
+	}
+
+	// Rebuild compacted view using agent.BuildModelView (Amendment E)
+	llmMsgs := agent.BuildModelView(rawLLMMsgs, compactions)
+	if llmMsgs == nil {
+		llmMsgs = rawLLMMsgs
 	}
 
 	// Inject the resume system note into conversation history
@@ -167,6 +178,7 @@ func LoadResumedSession(ctx context.Context, store *Store, sessionID string) (*R
 		ToolCallsByMsg: toolCallsMap,
 		Checkpoints:    checkpoints,
 		Usage:          usageList,
+		Compactions:    compactions,
 		LLMMessages:    llmMsgs,
 		TotalCost:      totalCost,
 		TotalTokens:    totalTokens,

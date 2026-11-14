@@ -414,7 +414,7 @@ All events are plain, JSON-serializable structs (Wails generates TypeScript type
 - [ ] SQLite sessions and `--resume`
 - [ ] Permission policy engine, modes, and audit log
 - [ ] Git checkpoints, `/undo`, `/restore`
-- [ ] Context compaction and budgets
+- [x] Context compaction and budgets
 - [ ] Status bar, command palette, `@` mentions, themes
 - [ ] Headless mode with JSON output
 

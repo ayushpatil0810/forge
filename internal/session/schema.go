@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const CurrentSchemaVersion = 1
+const CurrentSchemaVersion = 2
 
 const schemaV1 = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -70,6 +70,21 @@ CREATE TABLE IF NOT EXISTS usage (
 CREATE INDEX IF NOT EXISTS idx_usage_session ON usage(session_id);
 `
 
+const schemaV2 = `
+CREATE TABLE IF NOT EXISTS compactions (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    tier INTEGER NOT NULL,
+    summary TEXT NOT NULL,
+    first_message_id TEXT NOT NULL,
+    last_message_id TEXT NOT NULL,
+    tokens_before INTEGER NOT NULL,
+    tokens_after INTEGER NOT NULL,
+    created_at TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_compactions_session ON compactions(session_id);
+`
+
 func migrate(db *sql.DB) error {
 	// 1. Check if schema_version table exists
 	var tableExists int
@@ -99,6 +114,15 @@ func migrate(db *sql.DB) error {
 		}
 		if _, err := db.Exec("INSERT INTO schema_version (version, applied_at) VALUES (?, ?)", 1, time.Now().UTC()); err != nil {
 			return fmt.Errorf("recording schema version 1: %w", err)
+		}
+	}
+
+	if currentVersion < 2 {
+		if _, err := db.Exec(schemaV2); err != nil {
+			return fmt.Errorf("applying schema version 2: %w", err)
+		}
+		if _, err := db.Exec("INSERT INTO schema_version (version, applied_at) VALUES (?, ?)", 2, time.Now().UTC()); err != nil {
+			return fmt.Errorf("recording schema version 2: %w", err)
 		}
 	}
 

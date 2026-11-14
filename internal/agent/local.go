@@ -33,21 +33,60 @@ func NewLocal(cfg Config) Session {
 	if cfg.MaxRepeatedCalls <= 0 {
 		cfg.MaxRepeatedCalls = defaultMaxRepeatedCalls
 	}
+	if cfg.Tier1Threshold <= 0 {
+		cfg.Tier1Threshold = 0.60
+	}
+	if cfg.Tier2Threshold <= 0 {
+		cfg.Tier2Threshold = 0.80
+	}
+	if cfg.EmergencyThreshold <= 0 {
+		cfg.EmergencyThreshold = 0.92
+	}
+	if cfg.KeepRecentTurns <= 0 {
+		cfg.KeepRecentTurns = 6
+	}
+	if cfg.SummaryMaxTokens <= 0 {
+		cfg.SummaryMaxTokens = 1500
+	}
 	if cfg.Tools == nil {
 		cfg.Tools = tools.NewRegistry()
 	}
+	autoCompact := !cfg.NoAutoCompact
 	id := cfg.ID
 	if id == "" {
 		id = fmt.Sprintf("s_%d", time.Now().UnixNano())
 	}
+	history := make([]llm.Message, len(cfg.History))
+	copy(history, cfg.History)
+	var seq atomic.Int64
+	for i := range history {
+		if history[i].ID == "" {
+			history[i].ID = fmt.Sprintf("msg_%d_%d", time.Now().UnixNano(), seq.Add(1))
+		}
+	}
+	compactions := make([]CompactionRecord, len(cfg.Compactions))
+	copy(compactions, cfg.Compactions)
+
 	return &local{
-		id:      id,
-		cfg:     cfg,
-		events:  make(chan Event, 256),
-		closed:  make(chan struct{}),
-		pending: map[string]chan approvalResponse{},
-		always:  map[string]bool{},
-		history: cfg.History,
+		id:              id,
+		cfg:             cfg,
+		autoCompact:     autoCompact,
+		events:          make(chan Event, 256),
+		closed:          make(chan struct{}),
+		pending:         map[string]chan approvalResponse{},
+		always:          map[string]bool{},
+		history:         history,
+		compactions:     compactions,
+		calibratedRatio: 0.25,
+		budget:          NewBudgetTracker(cfg.MaxCostBudget, cfg.MaxTokensBudget),
+		contextUsage: ContextUsagePayload{
+			Window: cfg.ContextWindow,
+			Known:  cfg.ContextWindow > 0,
+		},
+		usage: UsageUpdatedPayload{
+			InputTokens: cfg.InitialTokens,
+			Cost:        cfg.InitialCost,
+		},
 	}
 }
 
@@ -64,17 +103,24 @@ type local struct {
 	seq    atomic.Int64
 	wg     sync.WaitGroup
 
-	mu         sync.Mutex // guards the fields below
-	mutatingMu sync.Mutex // ensures bash, edit_file, write_file never run concurrently
-	running    bool
-	isClosed   bool
-	cancel     context.CancelFunc
-	pending    map[string]chan approvalResponse
-	always     map[string]bool
-	usage      UsageUpdatedPayload
-	closeOnce  sync.Once
+	mu              sync.Mutex // guards the fields below
+	mutatingMu      sync.Mutex // ensures bash, edit_file, write_file never run concurrently
+	running         bool
+	isClosed        bool
+	cancel          context.CancelFunc
+	pending         map[string]chan approvalResponse
+	always          map[string]bool
+	usage           UsageUpdatedPayload
+	contextUsage    ContextUsagePayload
+	calibratedRatio float64
+	autoCompact     bool
+	budget          *BudgetTracker
+	budgetExceeded  bool
+	compactionUsage UsageUpdatedPayload
+	closeOnce       sync.Once
 
-	history []llm.Message // only touched by the single running turn
+	history     []llm.Message      // full uncompacted transcript for the life of the session (Amendment E)
+	compactions []CompactionRecord // records of all compactions applied to build model view
 
 	checkpointTakenInTurn bool
 	auditWarned           bool
@@ -117,6 +163,228 @@ func (s *local) Usage() Usage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.usage
+}
+
+func (s *local) ContextUsage() ContextUsage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.contextUsage
+}
+
+func (s *local) SetBudget(maxCost float64, maxTokens int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.budget != nil {
+		s.budget.SetBudget(maxCost, maxTokens)
+	}
+	s.budgetExceeded = false
+	if s.cfg.AuditLogger != nil {
+		_ = s.cfg.AuditLogger.Log(context.Background(), s.id, "budget_raised", "user", fmt.Sprintf("max_cost: $%.2f, max_tokens: %d", maxCost, maxTokens), "allow", "user", nil, nil, "")
+	}
+}
+
+func (s *local) History() []llm.Message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make([]llm.Message, len(s.history))
+	for i, m := range s.history {
+		cp[i] = cloneMessage(m)
+	}
+	return cp
+}
+
+func (s *local) ModelView() []llm.Message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return BuildModelView(s.history, s.compactions)
+}
+
+func (s *local) buildModelView() []llm.Message {
+	return BuildModelView(s.history, s.compactions)
+}
+
+func (s *local) Compact(ctx context.Context, focusText ...string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	focus := ""
+	if len(focusText) > 0 {
+		focus = focusText[0]
+	}
+	return s.compactLocked(ctx, 2, "manual", focus)
+}
+
+func (s *local) compactLocked(ctx context.Context, requestedTier int, reason string, focusText string) error {
+	currentView := BuildModelView(s.history, s.compactions)
+	boundary := FindTurnBoundary(currentView, s.cfg.KeepRecentTurns)
+	if boundary <= 0 {
+		return nil
+	}
+
+	toolSpecs := s.cfg.Tools.Specs()
+	charsBefore := EstimateChars(currentView, s.cfg.System, toolSpecs)
+	tokensBefore := int(float64(charsBefore) * s.calibratedRatio)
+
+	s.emit(Event{
+		Type: EventCompactionStarted,
+		CompactionStart: &CompactionStartedPayload{
+			Tier:   requestedTier,
+			Reason: reason,
+		},
+	})
+
+	tracker := s.cfg.Tools.Tracker()
+	targetTokens := 0
+	if s.contextUsage.Window > 0 {
+		targetTokens = int(s.cfg.Tier1Threshold * float64(s.contextUsage.Window))
+	}
+
+	t1Summary, clearedCount := IdentifyToolOutputsToClear(currentView, boundary, tracker, targetTokens, s.calibratedRatio, tokensBefore)
+	if clearedCount > 0 {
+		t1JSON, _ := json.Marshal(t1Summary)
+		firstID := ""
+		lastID := ""
+		if len(currentView) > 0 {
+			firstID = currentView[0].ID
+		}
+		if boundary > 0 && boundary <= len(currentView) {
+			lastID = currentView[boundary-1].ID
+		}
+		rec := CompactionRecord{
+			ID:             fmt.Sprintf("cmp_t1_%d", time.Now().UnixNano()),
+			SessionID:      s.id,
+			Tier:           1,
+			Summary:        string(t1JSON),
+			FirstMessageID: firstID,
+			LastMessageID:  lastID,
+			TokensBefore:   tokensBefore,
+			TokensAfter:    tokensBefore,
+			CreatedAt:      time.Now().UTC(),
+		}
+		s.compactions = append(s.compactions, rec)
+		if s.cfg.SessionStore != nil {
+			_ = s.cfg.SessionStore.SaveCompaction(ctx, rec)
+		}
+	}
+
+	if requestedTier < 2 {
+		viewAfter := BuildModelView(s.history, s.compactions)
+		charsAfter := EstimateChars(viewAfter, s.cfg.System, toolSpecs)
+		tokensAfter := int(float64(charsAfter) * s.calibratedRatio)
+		s.contextUsage.Used = tokensAfter
+		if s.contextUsage.Window > 0 {
+			s.contextUsage.Percent = (tokensAfter * 100) / s.contextUsage.Window
+		}
+		s.emit(Event{
+			Type: EventCompactionFinished,
+			CompactionDone: &CompactionFinishedPayload{
+				Tier:         1,
+				TokensBefore: tokensBefore,
+				TokensAfter:  tokensAfter,
+				SummaryChars: 0,
+				OK:           true,
+			},
+		})
+		s.emit(Event{Type: EventContextUsageUpdated, ContextUsage: &s.contextUsage})
+		return nil
+	}
+
+	// Tier 2: Summarization
+	currentView = BuildModelView(s.history, s.compactions)
+	boundary = FindTurnBoundary(currentView, s.cfg.KeepRecentTurns)
+	if boundary <= 0 {
+		return nil
+	}
+
+	summary, inTok, outTok, cost, err := GenerateSummary(ctx, s.cfg.Provider, "", currentView, boundary, s.cfg.SummaryMaxTokens, focusText, s.budget)
+	if err != nil {
+		s.emit(Event{
+			Type:   EventNotice,
+			Notice: fmt.Sprintf("Context summarization failed (%v); keeping cleared tool outputs only", err),
+		})
+		viewAfter := BuildModelView(s.history, s.compactions)
+		charsAfter := EstimateChars(viewAfter, s.cfg.System, toolSpecs)
+		tokensAfter := int(float64(charsAfter) * s.calibratedRatio)
+		s.contextUsage.Used = tokensAfter
+		if s.contextUsage.Window > 0 {
+			s.contextUsage.Percent = (tokensAfter * 100) / s.contextUsage.Window
+		}
+		s.emit(Event{
+			Type: EventCompactionFinished,
+			CompactionDone: &CompactionFinishedPayload{
+				Tier:         1,
+				TokensBefore: tokensBefore,
+				TokensAfter:  tokensAfter,
+				SummaryChars: 0,
+				OK:           false,
+				Error:        err.Error(),
+			},
+		})
+		s.emit(Event{Type: EventContextUsageUpdated, ContextUsage: &s.contextUsage})
+
+		if s.contextUsage.Window > 0 && tokensAfter >= int(s.cfg.EmergencyThreshold*float64(s.contextUsage.Window)) {
+			return fmt.Errorf("context length %d exceeds emergency threshold (92%%) and automatic summarization was unavailable: %w", tokensAfter, err)
+		}
+		return nil
+	}
+
+	s.compactionUsage.InputTokens += inTok
+	s.compactionUsage.OutputTokens += outTok
+	s.compactionUsage.Cost += cost
+	s.usage.CompactionTokens += (inTok + outTok)
+	s.usage.CompactionCost += cost
+	s.usage.InputTokens += inTok
+	s.usage.OutputTokens += outTok
+	s.usage.Cost += cost
+
+	firstID := ""
+	lastID := ""
+	if len(currentView) > 0 {
+		firstID = currentView[0].ID
+	}
+	if boundary > 0 && boundary <= len(currentView) {
+		lastID = currentView[boundary-1].ID
+	}
+
+	rec := CompactionRecord{
+		ID:             fmt.Sprintf("cmp_t2_%d", time.Now().UnixNano()),
+		SessionID:      s.id,
+		Tier:           2,
+		Summary:        summary,
+		FirstMessageID: firstID,
+		LastMessageID:  lastID,
+		TokensBefore:   tokensBefore,
+		TokensAfter:    0,
+		CreatedAt:      time.Now().UTC(),
+	}
+
+	s.compactions = append(s.compactions, rec)
+
+	viewAfter := BuildModelView(s.history, s.compactions)
+	charsAfter := EstimateChars(viewAfter, s.cfg.System, toolSpecs)
+	tokensAfter := int(float64(charsAfter) * s.calibratedRatio)
+	rec.TokensAfter = tokensAfter
+
+	if s.cfg.SessionStore != nil {
+		_ = s.cfg.SessionStore.SaveCompaction(ctx, rec)
+	}
+
+	s.contextUsage.Used = tokensAfter
+	if s.contextUsage.Window > 0 {
+		s.contextUsage.Percent = (tokensAfter * 100) / s.contextUsage.Window
+	}
+
+	s.emit(Event{
+		Type: EventCompactionFinished,
+		CompactionDone: &CompactionFinishedPayload{
+			Tier:         2,
+			TokensBefore: tokensBefore,
+			TokensAfter:  tokensAfter,
+			SummaryChars: len(summary),
+			OK:           true,
+		},
+	})
+	s.emit(Event{Type: EventContextUsageUpdated, ContextUsage: &s.contextUsage})
+	return nil
 }
 
 func (s *local) Mode() permission.Mode {
@@ -196,31 +464,113 @@ func (s *local) runTurn(ctx context.Context, cancel context.CancelFunc, prompt s
 
 // loop is the agent loop: model -> tools -> model ... until no tool calls or stopped.
 func (s *local) loop(ctx context.Context, prompt string) Event {
-	s.history = append(s.history, llm.Message{Role: llm.RoleUser, Text: prompt})
+	s.mu.Lock()
+	userMsg := llm.Message{
+		ID:   fmt.Sprintf("msg_%d_%d", time.Now().UnixNano(), s.seq.Add(1)),
+		Role: llm.RoleUser,
+		Text: prompt,
+	}
+	s.history = append(s.history, userMsg)
+	s.mu.Unlock()
 
 	var lastToolCallsSig string
 	var consecutiveRepeats int
 	failingCmdCounts := make(map[string]int)
 	var lastEditKey string
+	var reactiveDone bool
 
 	for turn := 0; turn < s.cfg.MaxTurns; turn++ {
-		msg, err := s.streamModel(ctx)
+		// Budget check before calling model
+		s.mu.Lock()
+		if s.budgetExceeded {
+			s.mu.Unlock()
+			return Event{Type: EventDone, Done: &DonePayload{Reason: "budget_exceeded"}}
+		}
+		if s.budget != nil {
+			if err := s.budget.CheckPreCall(); err != nil {
+				s.budgetExceeded = true
+				s.mu.Unlock()
+				return Event{Type: EventDone, Done: &DonePayload{Reason: "budget_exceeded"}}
+			}
+		}
+
+		// Auto-compaction check before model call (Amendment E: operates on model view)
+		toolSpecs := s.cfg.Tools.Specs()
+		currentView := s.buildModelView()
+		chars := EstimateChars(currentView, s.cfg.System, toolSpecs)
+		estTokens := int(float64(chars) * s.calibratedRatio)
+		s.contextUsage.Used = estTokens
+		if s.contextUsage.Window > 0 {
+			s.contextUsage.Percent = (estTokens * 100) / s.contextUsage.Window
+		}
+
+		if s.autoCompact && s.contextUsage.Window > 0 {
+			if estTokens >= int(s.cfg.EmergencyThreshold*float64(s.contextUsage.Window)) {
+				if err := s.compactLocked(ctx, 2, "emergency", ""); err != nil {
+					s.mu.Unlock()
+					return Event{
+						Type: EventError,
+						Err: &ErrorPayload{
+							Code:     ErrCodeContextLength,
+							Message:  err.Error(),
+							Guidance: "Conversation length reached emergency threshold (92%) and automatic summarization was unavailable. Start a new session or switch models.",
+						},
+					}
+				}
+			} else if estTokens >= int(s.cfg.Tier2Threshold*float64(s.contextUsage.Window)) {
+				_ = s.compactLocked(ctx, 2, "tier2_threshold", "")
+			} else if estTokens >= int(s.cfg.Tier1Threshold*float64(s.contextUsage.Window)) {
+				_ = s.compactLocked(ctx, 1, "tier1_threshold", "")
+			}
+		}
+		modelView := s.buildModelView()
+		s.mu.Unlock()
+
+		msg, err := s.streamModel(ctx, modelView)
 		if ctx.Err() != nil {
 			return Event{Type: EventDone, Done: &DonePayload{Reason: "cancelled"}}
 		}
 		if err != nil {
 			code, guidance := ClassifyError(err)
-			return Event{
-				Type: EventError,
-				Err: &ErrorPayload{
-					Code:      code,
-					Message:   RedactSecrets(err.Error()),
-					Guidance:  guidance,
-					Retryable: code == ErrCodeRateLimit || code == ErrCodeNetwork,
-				},
+			// Reactive compaction on context length error: compact once and retry once! Never loop.
+			if code == ErrCodeContextLength && !reactiveDone {
+				reactiveDone = true
+				s.emit(Event{Type: EventNotice, Notice: "Context length exceeded. Running reactive compaction and retrying..."})
+				s.mu.Lock()
+				compactErr := s.compactLocked(ctx, 2, "reactive", "")
+				retriedView := s.buildModelView()
+				s.mu.Unlock()
+				if compactErr == nil {
+					msg, err = s.streamModel(ctx, retriedView)
+					if err != nil {
+						code, guidance = ClassifyError(err)
+					}
+				}
+			}
+			if err != nil {
+				return Event{
+					Type: EventError,
+					Err: &ErrorPayload{
+						Code:      code,
+						Message:   RedactSecrets(err.Error()),
+						Guidance:  guidance,
+						Retryable: code == ErrCodeRateLimit || code == ErrCodeNetwork,
+					},
+				}
 			}
 		}
+
+		s.mu.Lock()
+		if msg.ID == "" {
+			msg.ID = fmt.Sprintf("msg_%d_%d", time.Now().UnixNano(), s.seq.Add(1))
+		}
 		s.history = append(s.history, msg)
+		if s.budgetExceeded {
+			s.mu.Unlock()
+			return Event{Type: EventDone, Done: &DonePayload{Reason: "budget_exceeded"}}
+		}
+		s.mu.Unlock()
+
 		if len(msg.ToolCalls) == 0 {
 			return Event{Type: EventDone, Done: &DonePayload{Reason: "completed"}}
 		}
@@ -256,7 +606,12 @@ func (s *local) loop(ctx context.Context, prompt string) Event {
 		// history becomes invalid for the next request.
 		for _, call := range msg.ToolCalls {
 			resMsg := s.runToolCall(ctx, call)
+			if resMsg.ID == "" {
+				resMsg.ID = fmt.Sprintf("msg_%d_%d", time.Now().UnixNano(), s.seq.Add(1))
+			}
+			s.mu.Lock()
 			s.history = append(s.history, resMsg)
+			s.mu.Unlock()
 
 			// Fix loop stall guard: if bash fails 3 times with the exact same file content, abort
 			if call.Name == "bash" && resMsg.IsError {
@@ -297,7 +652,7 @@ func (s *local) loop(ctx context.Context, prompt string) Event {
 	}
 }
 
-func (s *local) streamModel(ctx context.Context) (llm.Message, error) {
+func (s *local) streamModel(ctx context.Context, messages []llm.Message) (llm.Message, error) {
 	retryCtx := retry.ContextWithOnRetry(ctx, func(attempt, maxAttempts int, delay time.Duration, err error) {
 		redactedErr := ""
 		if err != nil {
@@ -314,9 +669,19 @@ func (s *local) streamModel(ctx context.Context) (llm.Message, error) {
 		})
 	})
 
+	s.mu.Lock()
+	if s.budget != nil {
+		if err := s.budget.CheckPreCall(); err != nil {
+			s.budgetExceeded = true
+			s.mu.Unlock()
+			return llm.Message{}, err
+		}
+	}
+	s.mu.Unlock()
+
 	ch, err := s.cfg.Provider.Stream(retryCtx, llm.Request{
 		System:    s.cfg.System,
-		Messages:  s.history,
+		Messages:  messages,
 		Tools:     s.cfg.Tools.Specs(),
 		MaxTokens: s.cfg.MaxTokens,
 	})
@@ -342,9 +707,35 @@ func (s *local) streamModel(ctx context.Context) (llm.Message, error) {
 				s.usage.InputTokens += ev.Usage.InputTokens
 				s.usage.OutputTokens += ev.Usage.OutputTokens
 				s.usage.Cost += ev.Usage.Cost
+
+				// Calibrate token estimation ratio
+				chars := EstimateChars(messages, s.cfg.System, s.cfg.Tools.Specs())
+				if chars > 0 && ev.Usage.InputTokens > 0 {
+					s.calibratedRatio = float64(ev.Usage.InputTokens) / float64(chars)
+				}
+				s.contextUsage.Used = ev.Usage.InputTokens
+				if s.contextUsage.Window > 0 {
+					s.contextUsage.Percent = (ev.Usage.InputTokens * 100) / s.contextUsage.Window
+				}
+
+				var warnNotice string
+				if s.budget != nil {
+					exceeded, warnMsg := s.budget.RecordUsage(ev.Usage.InputTokens, ev.Usage.OutputTokens, ev.Usage.Cost, false)
+					if exceeded {
+						s.budgetExceeded = true
+					}
+					warnNotice = warnMsg
+				}
+
 				currentUsage := s.usage
+				currentContextUsage := s.contextUsage
 				s.mu.Unlock()
+
 				s.emit(Event{Type: EventUsageUpdated, Usage: &currentUsage})
+				s.emit(Event{Type: EventContextUsageUpdated, ContextUsage: &currentContextUsage})
+				if warnNotice != "" {
+					s.emit(Event{Type: EventNotice, Notice: warnNotice})
+				}
 			}
 		case llm.StreamError:
 			return msg, ev.Err

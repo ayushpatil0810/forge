@@ -166,6 +166,19 @@ forge checkpoints restore <id>
 ```
 For architecture details and isolation guarantees, see [docs/checkpoints.md](docs/checkpoints.md).
 
+#### Context Compaction & Token/Cost Budgets
+Forge automatically manages context window limits using multi-tier compaction (tool clearing at 60%, summarization at 80%, reactive retry on context errors) while preserving the full uncompacted transcript in SQLite:
+```bash
+# In TUI session:
+/compact [focus text] # Manually compress older context turns
+/cost                 # Show detailed token and cost breakdown
+/budget <amount>      # Dynamically update session budget (e.g. /budget 5.00)
+
+# From CLI:
+forge run "Task" --max-cost 2.50 --max-tokens 50000 --context-window 128000
+```
+For compaction strategies, injection hardening, and budget mechanics, see [docs/context.md](docs/context.md) and [docs/budgets.md](docs/budgets.md).
+
 ---
 
 ## Session Persistence & Resume

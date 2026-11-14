@@ -34,6 +34,27 @@ var (
 // Usage aliases UsageUpdatedPayload for convenient frontend access.
 type Usage = UsageUpdatedPayload
 
+// ContextUsage aliases ContextUsagePayload for convenient frontend access.
+type ContextUsage = ContextUsagePayload
+
+// CompactionRecord represents a recorded context compaction event.
+type CompactionRecord struct {
+	ID             string    `json:"id"`
+	SessionID      string    `json:"session_id"`
+	Tier           int       `json:"tier"`
+	Summary        string    `json:"summary"`
+	FirstMessageID string    `json:"first_message_id"`
+	LastMessageID  string    `json:"last_message_id"`
+	TokensBefore   int       `json:"tokens_before"`
+	TokensAfter    int       `json:"tokens_after"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+// CompactionStore persists compaction records to storage.
+type CompactionStore interface {
+	SaveCompaction(ctx context.Context, c CompactionRecord) error
+}
+
 // Session is the whole contract between the engine and any frontend (SPEC §6.3).
 // A future remote (daemon) implementation can satisfy it unchanged.
 type Session interface {
@@ -50,6 +71,16 @@ type Session interface {
 	Cancel()
 	// Usage returns the cumulative usage for the session.
 	Usage() Usage
+	// ContextUsage returns the current context window usage details.
+	ContextUsage() ContextUsage
+	// Compact runs manual context compaction with optional focus text.
+	Compact(ctx context.Context, focusText ...string) error
+	// SetBudget dynamically updates the run token or cost budget (e.g. via /budget command).
+	SetBudget(maxCost float64, maxTokens int)
+	// History returns a copy of the active in-memory history (uncompacted transcript).
+	History() []llm.Message
+	// ModelView returns a copy of the compacted history sent to the model.
+	ModelView() []llm.Message
 	// Mode returns the active permission mode.
 	Mode() permission.Mode
 	// SetMode dynamically updates the permission mode (SPEC §3.3).
@@ -80,18 +111,32 @@ type Checkpointer interface {
 }
 
 type Config struct {
-	ID               string
-	History          []llm.Message
-	Provider         llm.Provider
-	Tools            *tools.Registry
-	Policy           permission.Policy
-	PolicySet        *policy.PolicySet
-	AuditLogger      *audit.Logger
-	Checkpointer     Checkpointer
-	System           string
-	MaxTokens        int
-	MaxTurns         int // hard cap on model calls per Send; guards runaway tool loops (A-5)
-	MaxRepeatedCalls int // threshold for repeated identical tool calls (A-5)
-	IsHeadless       bool
-	AutoApprove      bool
+	ID                 string
+	History            []llm.Message
+	Provider           llm.Provider
+	Tools              *tools.Registry
+	Policy             permission.Policy
+	PolicySet          *policy.PolicySet
+	AuditLogger        *audit.Logger
+	Checkpointer       Checkpointer
+	System             string
+	MaxTokens          int
+	MaxTurns           int // hard cap on model calls per Send; guards runaway tool loops (A-5)
+	MaxRepeatedCalls   int // threshold for repeated identical tool calls (A-5)
+	IsHeadless         bool
+	AutoApprove        bool
+	ContextWindow      int
+	AutoCompact        bool
+	NoAutoCompact      bool
+	Tier1Threshold     float64
+	Tier2Threshold     float64
+	EmergencyThreshold float64
+	KeepRecentTurns    int
+	SummaryMaxTokens   int
+	MaxCostBudget      float64
+	MaxTokensBudget    int
+	SessionStore       CompactionStore
+	InitialTokens      int
+	InitialCost        float64
+	Compactions        []CompactionRecord
 }

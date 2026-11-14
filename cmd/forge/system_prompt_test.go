@@ -23,6 +23,10 @@ func resetCLIFlags() {
 	noSessionFlag = false
 	systemPromptFlag = ""
 	allowInsecureBaseURLFlag = false
+	noAutoCompactFlag = false
+	contextWindowFlag = 0
+	maxCostFlag = 0
+	maxTokensFlag = 0
 	observeSystemPrompt = nil
 	stopAfterSystemPrompt = false
 }

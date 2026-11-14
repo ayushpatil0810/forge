@@ -23,6 +23,7 @@ type ToolCall struct {
 
 // Message is one entry in the conversation history.
 type Message struct {
+	ID         string     `json:"id,omitempty"`
 	Role       Role       `json:"role"`
 	Text       string     `json:"text,omitempty"`
 	ToolCalls  []ToolCall `json:"toolCalls,omitempty"`  // assistant only
@@ -67,6 +68,16 @@ type StreamEvent struct {
 	ToolCall *ToolCall
 	Usage    *Usage
 	Err      error
+}
+
+// ContextLengthError indicates that a model request exceeded the context window (SPEC Amendment D).
+type ContextLengthError struct {
+	Provider string
+	Message  string
+}
+
+func (e *ContextLengthError) Error() string {
+	return e.Message
 }
 
 // ModelInfo describes a model supported by a provider (SPEC §6.3).

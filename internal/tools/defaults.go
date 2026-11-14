@@ -19,7 +19,7 @@ func defaultTools(workspaceRoot string, envAllow []string, shells ...ShellConfig
 	if shell.Path == "" {
 		shell = DetectShell("")
 	}
-	return NewRegistry(
+	reg := NewRegistry(
 		ReadFile{Root: workspaceRoot, Tracker: tracker},
 		WriteFile{Root: workspaceRoot, Tracker: tracker},
 		EditFile{Root: workspaceRoot, Tracker: tracker},
@@ -28,13 +28,15 @@ func defaultTools(workspaceRoot string, envAllow []string, shells ...ShellConfig
 		Grep{Root: workspaceRoot},
 		Bash{Root: workspaceRoot, Shell: shell, EnvAllow: append([]string(nil), envAllow...)},
 	)
+	reg.SetTracker(tracker)
+	return reg
 }
 
 // DemoTools returns a tool registry tailored for the deterministic demo scenario.
 // read_file and edit_file remain real; bash uses DemoBash to run on any host without a Go compiler.
 func DemoTools(workspaceRoot string, speed float64) *Registry {
 	tracker := NewReadTracker()
-	return NewRegistry(
+	reg := NewRegistry(
 		ReadFile{Root: workspaceRoot, Tracker: tracker},
 		WriteFile{Root: workspaceRoot, Tracker: tracker},
 		EditFile{Root: workspaceRoot, Tracker: tracker},
@@ -43,4 +45,6 @@ func DemoTools(workspaceRoot string, speed float64) *Registry {
 		Grep{Root: workspaceRoot},
 		NewDemoBash(workspaceRoot, speed),
 	)
+	reg.SetTracker(tracker)
+	return reg
 }
