@@ -41,9 +41,17 @@ type Manager struct {
 	ShadowDir      string
 	MaxCheckpoints int
 	MaxFileSize    int64
+	LockTimeout    time.Duration
 	disabled       bool
 	disableReason  string
 	initialized    bool
+}
+
+func (m *Manager) lockTimeout() time.Duration {
+	if m.LockTimeout > 0 {
+		return m.LockTimeout
+	}
+	return 30 * time.Second
 }
 
 // GitVersionFunc allows mocking git version output in tests.
@@ -258,7 +266,7 @@ func (m *Manager) Create(ctx context.Context, message string) (*Checkpoint, erro
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	lock, err := acquireLock(ctx, m.ShadowDir+".lock", 10*time.Second)
+	lock, err := acquireLock(ctx, m.ShadowDir+".lock", m.lockTimeout())
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +353,7 @@ func (m *Manager) Restore(ctx context.Context, id string) (*Checkpoint, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	lock, err := acquireLock(ctx, m.ShadowDir+".lock", 10*time.Second)
+	lock, err := acquireLock(ctx, m.ShadowDir+".lock", m.lockTimeout())
 	if err != nil {
 		return nil, err
 	}

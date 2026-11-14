@@ -6,11 +6,20 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/ayushpatil0810/forge/internal/testutil"
 )
 
 func TestMain(m *testing.M) {
+	_, cleanup := testutil.IsolateTestEnvironment()
 	ArmForTest()
-	os.Exit(m.Run())
+	code := m.Run()
+	cleanup()
+	os.Exit(code)
+}
+
+func TestHomeIsolationGuard(t *testing.T) {
+	testutil.AssertIsolatedHome(t)
 }
 
 func TestNetGuardRejectsNonLoopback(t *testing.T) {

@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ayushpatil0810/forge/internal/agent"
 	"github.com/ayushpatil0810/forge/internal/credentials"
+	"github.com/ayushpatil0810/forge/internal/session"
 	"github.com/zalando/go-keyring"
 )
 
@@ -89,5 +91,105 @@ func TestBudget_HeadlessExitCode5(t *testing.T) {
 		if out.Status != "budget_exceeded" {
 			t.Fatalf("expected status 'budget_exceeded', got %q", out.Status)
 		}
+	}
+}
+
+func TestHeadlessRefusesModelSwitch_WhenHistoryExceedsWindow(t *testing.T) {
+	resetCLIFlags()
+	t.Cleanup(resetCLIFlags)
+
+	ws := t.TempDir()
+	store, err := session.NewStore("")
+	if err != nil {
+		t.Fatalf("NewStore failed: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	sessionID := "test-session-exceeds-window"
+	_ = store.CreateSession(ctx, session.SessionRecord{
+		ID:        sessionID,
+		Workspace: session.CanonicalWorkspace(ws),
+		Provider:  "mock",
+		Model:     "mock-model",
+		Title:     "Session with long history",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	})
+
+	longContent := strings.Repeat("This is a long sentence for token estimation. ", 50)
+	_ = store.SaveMessage(ctx, session.MessageRecord{
+		ID:        "msg_1",
+		SessionID: sessionID,
+		Role:      "user",
+		Content:   longContent,
+		CreatedAt: time.Now(),
+	})
+	_ = store.SaveMessage(ctx, session.MessageRecord{
+		ID:        "msg_2",
+		SessionID: sessionID,
+		Role:      "assistant",
+		Content:   longContent,
+		CreatedAt: time.Now(),
+	})
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{
+		"run",
+		"--demo",
+		"--resume", sessionID,
+		"--root", ws,
+		"--context-window", "50",
+		"continue",
+	})
+
+	err = cmd.ExecuteContext(ctx)
+	if err == nil {
+		t.Fatal("expected error when session history exceeds context window")
+	}
+
+	exitErr, ok := err.(ExitCodeError)
+	if !ok {
+		t.Fatalf("expected ExitCodeError, got %T: %v", err, err)
+	}
+	if exitErr.Code != 1 {
+		t.Fatalf("expected exit code 1, got %d (err: %v)", exitErr.Code, exitErr)
+	}
+	if !strings.Contains(err.Error(), "exceeds model context window") {
+		t.Fatalf("expected error message to mention context window, got: %v", err)
+	}
+}
+
+func TestStreamJSON_CompactionEvents(t *testing.T) {
+	started := agent.Event{
+		Type: agent.EventCompactionStarted,
+		CompactionStart: &agent.CompactionStartedPayload{
+			Tier:   1,
+			Reason: "threshold_exceeded",
+		},
+	}
+	data, err := json.Marshal(started)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	if !strings.Contains(string(data), `"type":"CompactionStarted"`) || !strings.Contains(string(data), `"tier":1`) || !strings.Contains(string(data), `"reason":"threshold_exceeded"`) {
+		t.Fatalf("unexpected stream-json payload: %s", string(data))
+	}
+
+	finished := agent.Event{
+		Type: agent.EventCompactionFinished,
+		CompactionDone: &agent.CompactionFinishedPayload{
+			Tier:         2,
+			TokensBefore: 50000,
+			TokensAfter:  20000,
+			OK:           true,
+		},
+	}
+	data, err = json.Marshal(finished)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	if !strings.Contains(string(data), `"type":"CompactionFinished"`) || !strings.Contains(string(data), `"tokens_before":50000`) {
+		t.Fatalf("unexpected stream-json payload: %s", string(data))
 	}
 }

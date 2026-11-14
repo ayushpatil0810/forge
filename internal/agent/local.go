@@ -199,6 +199,41 @@ func (s *local) ModelView() []llm.Message {
 	return BuildModelView(s.history, s.compactions)
 }
 
+func (s *local) UncompactAfter(targetTime time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var kept []CompactionRecord
+	for _, c := range s.compactions {
+		if !c.CreatedAt.After(targetTime) {
+			kept = append(kept, c)
+		}
+	}
+	s.compactions = kept
+
+	if s.cfg.SessionStore != nil {
+		if ds, ok := s.cfg.SessionStore.(interface {
+			DiscardCompactionsAfter(ctx context.Context, sessionID string, after time.Time) error
+		}); ok {
+			_ = ds.DiscardCompactionsAfter(context.Background(), s.id, targetTime)
+		}
+	}
+
+	toolSpecs := []llm.ToolSpec{}
+	if s.cfg.Tools != nil {
+		toolSpecs = s.cfg.Tools.Specs()
+	}
+	viewAfter := BuildModelView(s.history, s.compactions)
+	charsAfter := EstimateChars(viewAfter, s.cfg.System, toolSpecs)
+	tokensAfter := int(float64(charsAfter) * s.calibratedRatio)
+	s.contextUsage.Used = tokensAfter
+	if s.contextUsage.Window > 0 {
+		s.contextUsage.Percent = (tokensAfter * 100) / s.contextUsage.Window
+	}
+
+	return nil
+}
+
 func (s *local) buildModelView() []llm.Message {
 	return BuildModelView(s.history, s.compactions)
 }
@@ -262,7 +297,18 @@ func (s *local) compactLocked(ctx context.Context, requestedTier int, reason str
 		}
 		s.compactions = append(s.compactions, rec)
 		if s.cfg.SessionStore != nil {
-			_ = s.cfg.SessionStore.SaveCompaction(ctx, rec)
+			if err := s.cfg.SessionStore.SaveCompaction(ctx, rec); err != nil {
+				s.compactions = s.compactions[:len(s.compactions)-1]
+				s.emit(Event{
+					Type: EventCompactionFinished,
+					CompactionDone: &CompactionFinishedPayload{
+						Tier:  1,
+						OK:    false,
+						Error: err.Error(),
+					},
+				})
+				return err
+			}
 		}
 	}
 
@@ -365,7 +411,18 @@ func (s *local) compactLocked(ctx context.Context, requestedTier int, reason str
 	rec.TokensAfter = tokensAfter
 
 	if s.cfg.SessionStore != nil {
-		_ = s.cfg.SessionStore.SaveCompaction(ctx, rec)
+		if err := s.cfg.SessionStore.SaveCompaction(ctx, rec); err != nil {
+			s.compactions = s.compactions[:len(s.compactions)-1]
+			s.emit(Event{
+				Type: EventCompactionFinished,
+				CompactionDone: &CompactionFinishedPayload{
+					Tier:  2,
+					OK:    false,
+					Error: err.Error(),
+				},
+			})
+			return err
+		}
 	}
 
 	s.contextUsage.Used = tokensAfter

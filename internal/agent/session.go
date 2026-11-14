@@ -75,6 +75,8 @@ type Session interface {
 	ContextUsage() ContextUsage
 	// Compact runs manual context compaction with optional focus text.
 	Compact(ctx context.Context, focusText ...string) error
+	// UncompactAfter reverts any compactions created after targetTime (e.g. during /undo).
+	UncompactAfter(targetTime time.Time) error
 	// SetBudget dynamically updates the run token or cost budget (e.g. via /budget command).
 	SetBudget(maxCost float64, maxTokens int)
 	// History returns a copy of the active in-memory history (uncompacted transcript).

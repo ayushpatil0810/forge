@@ -314,6 +314,13 @@ func newUndoCmd() *cobra.Command {
 			if err != nil {
 				return ExitCodeError{Code: 1, Err: err}
 			}
+			if store, err := session.NewStore(""); err == nil {
+				defer func() { _ = store.Close() }()
+				sessions, err := store.ListSessions(cmd.Context(), session.CanonicalWorkspace(rootFlag), false)
+				if err == nil && len(sessions) > 0 {
+					_ = store.DiscardCompactionsAfter(cmd.Context(), sessions[0].ID, target.Timestamp)
+				}
+			}
 			cmd.Printf("Reverted workspace to checkpoint %s (%s)\n", info.ID, target.Message)
 			return nil
 		},
@@ -959,6 +966,14 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 		Root:     cfg.WorkspaceRoot,
 	})
 
+	if len(sessionHistory) > 0 && ctxInfo.Known && ctxInfo.Window > 0 {
+		approxTokens := agent.EstimateChars(sessionHistory, systemPrompt, toolRegistry.Specs()) / 4
+		if approxTokens > ctxInfo.Window {
+			fmt.Fprintf(os.Stderr, "Error: session history (~%d tokens) exceeds context window of %s (%d tokens).\n", approxTokens, activeModel, ctxInfo.Window)
+			return ExitCodeError{Code: 1, Err: fmt.Errorf("session history exceeds model context window")}
+		}
+	}
+
 	s := agent.NewLocal(agent.Config{
 		ID:                 sessionID,
 		History:            sessionHistory,
@@ -1434,6 +1449,14 @@ func runInteractive(ctx context.Context) error {
 		Required: auditRequired,
 		Root:     cfg.WorkspaceRoot,
 	})
+
+	if len(sessionHistory) > 0 && ctxInfo.Known && ctxInfo.Window > 0 {
+		approxTokens := agent.EstimateChars(sessionHistory, systemPrompt, toolRegistry.Specs()) / 4
+		if approxTokens > ctxInfo.Window {
+			fmt.Fprintf(os.Stderr, "Error: session history (~%d tokens) exceeds context window of %s (%d tokens).\n", approxTokens, activeModel, ctxInfo.Window)
+			return ExitCodeError{Code: 1, Err: fmt.Errorf("session history exceeds model context window")}
+		}
+	}
 
 	s := agent.NewLocal(agent.Config{
 		ID:                 sessionID,
