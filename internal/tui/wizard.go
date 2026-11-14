@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ayushpatil0810/forge/internal/config"
 	"github.com/ayushpatil0810/forge/internal/credentials"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -25,9 +24,10 @@ type WizardState struct {
 	Providers     []string
 	KeyInput      string
 	DetectedLocal string
-	ModelIndex    int
-	Models        []string
+	ModelInput    string
 	StatusMsg     string
+	// switchOnly skips the key step when a key is already stored.
+	switchOnly bool
 }
 
 func NewWizardState() *WizardState {
@@ -36,6 +36,14 @@ func NewWizardState() *WizardState {
 		ProviderIndex: 0,
 		Providers:     []string{"anthropic", "openai", "gemini", "ollama", "lmstudio"},
 	}
+	return w
+}
+
+// NewModelSwitcher opens the provider and model list used by /models.
+// A hosted provider that has no saved key still asks for one.
+func NewModelSwitcher() *WizardState {
+	w := NewWizardState()
+	w.switchOnly = true
 	return w
 }
 
@@ -49,15 +57,15 @@ func (w *WizardState) CurrentProvider() string {
 func (w *WizardState) ProviderDisplayName(p string) string {
 	switch p {
 	case "anthropic":
-		return "Anthropic (Claude 3.7 / 3.5 Sonnet)"
+		return "Anthropic"
 	case "openai":
-		return "OpenAI (GPT-4o, o3-mini)"
+		return "OpenAI"
 	case "gemini":
-		return "Google Gemini (Gemini 2.5 Pro / Flash)"
+		return "Google Gemini"
 	case "ollama":
-		return "Ollama (Local open weights on 127.0.0.1:11434)"
+		return "Ollama (local server on 127.0.0.1:11434)"
 	case "lmstudio":
-		return "LM Studio (Local OpenAI server on 127.0.0.1:1234)"
+		return "LM Studio (local server on 127.0.0.1:1234)"
 	default:
 		return p
 	}
@@ -106,8 +114,7 @@ func (w *WizardState) Update(msg tea.Msg) (bool, tea.Cmd) {
 				mgr := credentials.NewManager(nil)
 				_, _ = mgr.Store(p, w.KeyInput, false)
 			}
-			// Setup models for step 3
-			w.initModelsForProvider(p)
+			w.StatusMsg = ""
 			w.Step = wizardStepModel
 			return false, nil
 		default:
@@ -121,16 +128,37 @@ func (w *WizardState) Update(msg tea.Msg) (bool, tea.Cmd) {
 		}
 	}
 
+	if w.Step == wizardStepModel {
+		switch keyMsg.String() {
+		case "backspace":
+			if len(w.ModelInput) > 0 {
+				w.ModelInput = w.ModelInput[:len(w.ModelInput)-1]
+			}
+			return false, nil
+		case "enter":
+			if strings.TrimSpace(w.ModelInput) == "" {
+				w.StatusMsg = "Enter the model ID you want to use."
+				return false, nil
+			}
+			w.ModelInput = strings.TrimSpace(w.ModelInput)
+			w.StatusMsg = ""
+			w.Step = wizardStepDone
+			return false, nil
+		default:
+			if len(keyMsg.Runes) > 0 {
+				w.ModelInput += string(keyMsg.Runes)
+				w.StatusMsg = ""
+			}
+			return false, nil
+		}
+	}
+
 	switch keyMsg.String() {
 	case "up", "k":
 		switch w.Step {
 		case wizardStepProvider:
 			if w.ProviderIndex > 0 {
 				w.ProviderIndex--
-			}
-		case wizardStepModel:
-			if w.ModelIndex > 0 {
-				w.ModelIndex--
 			}
 		}
 
@@ -139,10 +167,6 @@ func (w *WizardState) Update(msg tea.Msg) (bool, tea.Cmd) {
 		case wizardStepProvider:
 			if w.ProviderIndex < len(w.Providers)-1 {
 				w.ProviderIndex++
-			}
-		case wizardStepModel:
-			if w.ModelIndex < len(w.Models)-1 {
-				w.ModelIndex++
 			}
 		}
 
@@ -158,6 +182,11 @@ func (w *WizardState) Update(msg tea.Msg) (bool, tea.Cmd) {
 		switch w.Step {
 		case wizardStepProvider:
 			p := w.CurrentProvider()
+			if w.switchOnly && w.providerHasKey(p) {
+				w.StatusMsg = ""
+				w.Step = wizardStepModel
+				break
+			}
 			if p == "ollama" || p == "lmstudio" {
 				ollama, lm := credentials.ProbeLocalServers(context.Background())
 				if p == "ollama" && ollama {
@@ -169,9 +198,6 @@ func (w *WizardState) Update(msg tea.Msg) (bool, tea.Cmd) {
 				}
 			}
 			w.Step = wizardStepKey
-
-		case wizardStepModel:
-			w.Step = wizardStepDone
 
 		case wizardStepDone:
 			// Finished
@@ -190,22 +216,16 @@ func (w *WizardState) Update(msg tea.Msg) (bool, tea.Cmd) {
 	return false, nil
 }
 
-func (w *WizardState) initModelsForProvider(p string) {
-	switch p {
-	case "anthropic":
-		w.Models = []string{"claude-sonnet-5-5", "claude-haiku-4-5", "claude-opus-4-5"}
-	case "openai":
-		w.Models = []string{"gpt-4o", "gpt-4o-mini", "o3-mini", "o1"}
-	case "gemini":
-		w.Models = []string{"gemini-2.5-pro", "gemini-2.5-flash"}
-	case "ollama":
-		w.Models = []string{"llama3.3", "qwen2.5-coder:7b", "deepseek-r1:7b"}
-	case "lmstudio":
-		w.Models = []string{"model", "qwen2.5-coder", "deepseek-coder"}
-	default:
-		w.Models = []string{config.DefaultModelForProvider(p)}
+func (w *WizardState) providerHasKey(p string) bool {
+	if p == "ollama" || p == "lmstudio" {
+		return true
 	}
-	w.ModelIndex = 0
+	cred := credentials.NewManager(nil).Resolve(p)
+	return cred.Source != credentials.SourceNone && strings.TrimSpace(cred.Key) != ""
+}
+
+func (w *WizardState) SelectedModel() string {
+	return strings.TrimSpace(w.ModelInput)
 }
 
 func (w *WizardState) Render(width int, styles Styles) string {
@@ -218,7 +238,15 @@ func (w *WizardState) Render(width int, styles Styles) string {
 	}
 
 	var sb strings.Builder
-	title := styles.ActivityLabel.Bold(true).Render(fmt.Sprintf(" Welcome to Forge — Setup Wizard (Step %d/3) ", w.Step))
+	heading := "Welcome to Forge"
+	if w.switchOnly {
+		heading = "Switch model"
+	}
+	step := int(w.Step)
+	if step > 3 {
+		step = 3
+	}
+	title := styles.ActivityLabel.Bold(true).Render(fmt.Sprintf(" %s (Step %d/3) ", heading, step))
 	sb.WriteString(title + "\n\n")
 
 	switch w.Step {
@@ -236,7 +264,8 @@ func (w *WizardState) Render(width int, styles Styles) string {
 				sb.WriteString(styles.AssistantText.Render(line) + "\n")
 			}
 		}
-		sb.WriteString("\n" + styles.SystemInfo.Render("[Esc: Skip setup and enter terminal directly]"))
+		sb.WriteString("\n" + styles.SystemInfo.Render("No environment variable is required. The key is saved in your OS keychain."))
+		sb.WriteString("\n" + styles.SystemInfo.Render("[Esc: Skip and enter the terminal]"))
 
 	case wizardStepKey:
 		p := w.CurrentProvider()
@@ -265,32 +294,26 @@ func (w *WizardState) Render(width int, styles Styles) string {
 
 	case wizardStepModel:
 		p := w.CurrentProvider()
-		fmt.Fprintf(&sb, "Choose default model for %s:\n\n", strings.ToUpper(p))
-		for i, m := range w.Models {
-			prefix := "  "
-			if i == w.ModelIndex {
-				prefix = "❯ "
-			}
-			line := prefix + m
-			if i == 0 {
-				line += " (Recommended)"
-			}
-			if i == w.ModelIndex {
-				sb.WriteString(styles.UserPrompt.Render(line) + "\n")
-			} else {
-				sb.WriteString(styles.AssistantText.Render(line) + "\n")
-			}
+		fmt.Fprintf(&sb, "Enter the model ID for %s:\n\n", strings.ToUpper(p))
+		shown := w.ModelInput
+		if shown == "" {
+			shown = "(type the model ID)"
 		}
-		sb.WriteString("\n" + styles.UserPrompt.Render("Press Enter to confirm."))
+		sb.WriteString(styles.BorderBox.Render("Model: "+shown) + "\n\n")
+		sb.WriteString(styles.SystemInfo.Render("Use the exact model ID from your provider. Forge does not keep a model list.") + "\n\n")
+		if w.StatusMsg != "" {
+			sb.WriteString(styles.ErrorText.Render(w.StatusMsg) + "\n\n")
+		}
+		sb.WriteString(styles.UserPrompt.Render("Press Enter to use this model."))
 
 	case wizardStepDone:
-		sb.WriteString(styles.ToolCardSuccess.Render("✓ Setup completed successfully!") + "\n\n")
-		p := w.CurrentProvider()
-		m := ""
-		if w.ModelIndex < len(w.Models) {
-			m = w.Models[w.ModelIndex]
+		done := "✓ Setup completed successfully!"
+		if w.switchOnly {
+			done = "✓ Model switched."
 		}
-		fmt.Fprintf(&sb, "Active Provider: %s\nDefault Model:   %s\n\n", strings.ToUpper(p), m)
+		sb.WriteString(styles.ToolCardSuccess.Render(done) + "\n\n")
+		p := w.CurrentProvider()
+		fmt.Fprintf(&sb, "Active Provider: %s\nModel:           %s\n\n", strings.ToUpper(p), w.SelectedModel())
 		sb.WriteString(styles.UserPrompt.Render("• Press Enter to start coding\n• Or press 'd' to run the interactive demo\n"))
 	}
 

@@ -120,14 +120,14 @@ Record in `docs/PROGRESS.md`:
 Write-Host "Exit code: $LASTEXITCODE" # Must be 2
 ```
 
-### B. Live Provider Setup (Requires Real OpenAI API Key)
-*(Cannot be dry-run without real API key)*
+### B. Live Provider Setup (Requires a Real API Key)
+*(Cannot be dry-run without a real API key)*
 
 ```powershell
-# Interactive wizard
-& $forge auth login
+# First launch: setup screen asks for a provider, an API key, and a model ID you type
+& $forge
 
-# Or non-interactive stdin ingestion
+# Scripted alternative: store a key without opening the TUI
 "sk-proj-your-real-key-here" | & $forge auth login --provider openai --with-key
 
 # Check credential status

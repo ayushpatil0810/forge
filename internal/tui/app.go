@@ -174,6 +174,7 @@ type Model struct {
 	feedbackText          string
 	ctrlCPressed          bool
 	wizard                *WizardState
+	setupRequired         bool
 	sessionPicker         *SessionPicker
 	securityNotices       []string
 }
@@ -221,6 +222,59 @@ func (m *Model) SetBaseURL(url string) {
 
 func (m *Model) SetWizard(w *WizardState) {
 	m.wizard = w
+}
+
+// SetSetupRequired keeps the chat closed until a model has been chosen.
+func (m *Model) SetSetupRequired(required bool) {
+	m.setupRequired = required
+}
+
+func (m *Model) applyWizardSelection() {
+	m.providerName = m.wizard.CurrentProvider()
+	m.modelName = m.wizard.SelectedModel()
+	if m.modelName == "" {
+		m.items = append(m.items, errorMessage{text: "Enter a model ID before continuing."})
+		return
+	}
+	m.baseURL = baseURLForProvider(m.providerName, m.baseURL)
+	if err := config.SaveUserSelection(m.providerName, m.modelName, m.baseURL); err != nil {
+		m.items = append(m.items, errorMessage{text: "Could not save model choice: " + err.Error()})
+	}
+	cred := credentials.NewManager(nil).Resolve(m.providerName)
+	p, err := llm.NewProvider(llm.ProviderConfig{
+		Provider: m.providerName,
+		Model:    m.modelName,
+		BaseURL:  m.baseURL,
+		APIKey:   cred.Key,
+	})
+	if err != nil {
+		m.items = append(m.items, errorMessage{text: err.Error()})
+		return
+	}
+	m.session.SetProvider(p)
+	m.setupRequired = false
+}
+
+func baseURLForProvider(provider, current string) string {
+	const ollama = "http://127.0.0.1:11434"
+	const lmstudio = "http://127.0.0.1:1234/v1"
+	switch strings.ToLower(provider) {
+	case "ollama":
+		if current == "" || current == lmstudio {
+			return ollama
+		}
+		return current
+	case "lmstudio":
+		if current == "" || current == ollama {
+			return lmstudio
+		}
+		return current
+	default:
+		if current == ollama || current == lmstudio {
+			return ""
+		}
+		return current
+	}
 }
 
 func (m *Model) SetWorkspaceRoot(root string) {
@@ -331,28 +385,13 @@ func waitForEvent(ch <-chan agent.Event) tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.wizard != nil {
 		switch msg := msg.(type) {
-		case tea.WindowSizeMsg:
-			m.width = msg.Width
-			m.height = msg.Height
-			return m, nil
 		case tea.KeyMsg:
 			done, cmd := m.wizard.Update(msg)
 			if done {
 				if m.wizard.Step == wizardStepDone {
-					m.providerName = m.wizard.CurrentProvider()
-					if m.wizard.ModelIndex < len(m.wizard.Models) {
-						m.modelName = m.wizard.Models[m.wizard.ModelIndex]
-					}
-					credMgr := credentials.NewManager(nil)
-					cred := credMgr.Resolve(m.providerName)
-					if p, err := llm.NewProvider(llm.ProviderConfig{
-						Provider: m.providerName,
-						Model:    m.modelName,
-						BaseURL:  m.baseURL,
-						APIKey:   cred.Key,
-					}); err == nil {
-						m.session.SetProvider(p)
-					}
+					m.applyWizardSelection()
+				} else if m.setupRequired {
+					m.items = append(m.items, systemMessage{text: "Setup skipped. Type /settings to configure a model, or /models to switch provider."})
 				}
 				m.wizard = nil
 				m.textarea.Focus()
@@ -639,7 +678,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			if strings.HasPrefix(input, "/mode") {
+			if input == "/mode" || strings.HasPrefix(input, "/mode ") {
 				parts := strings.Fields(input)
 				if len(parts) == 1 {
 					m.cyclePermissionMode()
@@ -738,23 +777,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			if strings.HasPrefix(input, "/model") {
+			if input == "/models" {
+				m.items = append(m.items, userMessage{text: input})
+				m.textarea.Reset()
+				m.wizard = NewModelSwitcher()
+				return m, nil
+			}
+
+			if input == "/model" || strings.HasPrefix(input, "/model ") {
 				m.items = append(m.items, userMessage{text: input})
 				m.textarea.Reset()
 				parts := strings.Fields(input)
 				if len(parts) == 1 {
-					catalog := getModelCatalog(m.providerName)
-					var sb strings.Builder
-					fmt.Fprintf(&sb, "Models for %s:\n", strings.ToUpper(m.providerName))
-					for _, item := range catalog {
-						marker := "  "
-						if item.ID == m.modelName {
-							marker = "• [active] "
-						}
-						fmt.Fprintf(&sb, "%s%-20s (context: %dk, cost: $%.2f/$%.2f)\n", marker, item.ID, item.ContextWindow/1000, item.InputCostPerM, item.OutputCostPerM)
-					}
-					sb.WriteString("\nUse /model <id> to switch model.")
-					m.items = append(m.items, systemMessage{text: sb.String()})
+					m.items = append(m.items, systemMessage{text: fmt.Sprintf("Active model: %s\nType /model <id> and use the exact model ID from your provider.", m.modelName)})
 				} else {
 					targetModel := parts[1]
 					catalog := getModelCatalog(m.providerName)
@@ -869,6 +904,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
+			if input == "/settings" {
+				m.items = append(m.items, userMessage{text: input})
+				m.textarea.Reset()
+				m.wizard = NewWizardState()
+				return m, nil
+			}
+
 			if strings.HasPrefix(input, "/auth") {
 				m.items = append(m.items, userMessage{text: input})
 				m.textarea.Reset()
@@ -885,10 +927,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if res.Source != credentials.SourceNone && res.Key != "" {
 						fmt.Fprintf(&sb, "• %-10s: authenticated (%s, masked: %s)\n", p, res.Source, credentials.MaskKey(res.Key))
 					} else {
-						fmt.Fprintf(&sb, "• %-10s: unconfigured (run 'forge auth login %s' in terminal)\n", p, p)
+						fmt.Fprintf(&sb, "• %-10s: unconfigured (type /settings to add a key)\n", p)
 					}
 				}
 				m.items = append(m.items, systemMessage{text: sb.String()})
+				m.updateViewportContent()
+				return m, nil
+			}
+
+			if m.setupRequired {
+				m.textarea.Reset()
+				m.items = append(m.items, systemMessage{text: "Choose a model before sending a message."})
+				m.wizard = NewWizardState()
 				m.updateViewportContent()
 				return m, nil
 			}
@@ -1169,17 +1219,19 @@ func renderWelcomeBanner(width int, version, provider, model, mode, branch strin
 	var tips string
 	if width < 60 {
 		tips = fmt.Sprintf(
-			"\n%s\n%s\n%s",
+			"\n%s\n%s\n%s\n%s",
 			styles.SystemInfo.Render("Tab: mode"),
 			styles.SystemInfo.Render("Ctrl+O: tools"),
 			styles.SystemInfo.Render("Ctrl+C: quit"),
+			styles.SystemInfo.Render("/settings  /models"),
 		)
 	} else {
 		tips = fmt.Sprintf(
-			"\n%s  %s  %s",
+			"\n%s  %s  %s\n%s",
 			styles.SystemInfo.Render("Tab: mode"),
 			styles.SystemInfo.Render("Ctrl+O: tools"),
 			styles.SystemInfo.Render("Ctrl+C: quit"),
+			styles.SystemInfo.Render("/settings configures a model    /models switches provider"),
 		)
 	}
 

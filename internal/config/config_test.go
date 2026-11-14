@@ -23,6 +23,45 @@ func TestDefaultConfig(t *testing.T) {
 	}
 }
 
+func TestSaveUserSelectionKeepsOtherKeys(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	dir := filepath.Join(home, ".forge")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := "{\n  \"theme\": \"light\",\n  \"max_turns\": 12\n}\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SaveUserSelection("OpenAI", "gpt-4o", ""); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{`"provider": "openai"`, `"model": "gpt-4o"`, `"theme": "light"`, `"max_turns": 12`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("saved config missing %s:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "base_url") || strings.Contains(text, "sk-") {
+		t.Fatalf("saved config should not add a base URL or a key:\n%s", text)
+	}
+
+	cfg, err := Load(LoadOptions{UserConfigFile: filepath.Join(dir, "config.json"), ProjectConfigFile: filepath.Join(home, "missing.json"), WorkspaceRoot: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Provider != "openai" || cfg.Model != "gpt-4o" || cfg.Theme != "light" {
+		t.Fatalf("reloaded config = provider %s model %s theme %s", cfg.Provider, cfg.Model, cfg.Theme)
+	}
+}
+
 func TestDefaultModelForProvider(t *testing.T) {
 	cases := []struct {
 		provider string

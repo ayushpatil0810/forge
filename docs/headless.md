@@ -18,6 +18,8 @@ For developer convenience in interactive shells, passing a prompt directly to `f
 forge [flags] <prompt>
 ```
 
+Headless commands do not open the setup screen. They use the provider and model saved by an earlier `forge` session, or `--provider` and `--model`. The API key is the same one the interactive app stored in the OS keychain, unless that provider's environment variable is set. A hosted provider with no saved key and no environment variable exits before any model call.
+
 ---
 
 ## Flags Reference
@@ -30,7 +32,7 @@ forge [flags] <prompt>
 | `--yes` | `bool` | `false` | Auto-approve non-dangerous file edits and ordinary shell commands. |
 | `--yolo` | `bool` | `false` | Auto-approve actions that are not on the safety floor. Dangerous commands and protected paths are still denied. |
 | `--provider` | `string` | `"anthropic"` | LLM provider override (`anthropic`, `openai`, `gemini`, `mock`). |
-| `--model` | `string` | *(flagship)* | Model ID override. |
+| `--model` | `string` | Saved model, or the built-in fallback | Model ID sent to the provider. This is the ID you type, not a menu. |
 | `--base-url` | `string` | `""` | Custom API base URL (e.g. for Ollama `http://localhost:11434/v1`). |
 | `--root` | `string` | `"."` | Workspace root directory. |
 | `--shell` | `string` | *(auto)* | Host shell executable (`pwsh`, `powershell.exe`, `bash`, `cmd.exe`). |

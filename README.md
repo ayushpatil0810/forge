@@ -30,16 +30,16 @@ It gives developers an autonomous programming partner directly in the terminalâ€
 
 ## Provider Support Matrix
 
-| Provider | Default Model | Context Window | Status | Live Verification |
-| :--- | :--- | :--- | :--- | :--- |
-| **OpenAI** | `gpt-4o` | 128k | Production ready | **Verified live** (explore, edit, autonomous fix loop) |
-| **Anthropic** | `claude-sonnet-5-5` | 1M | Implemented | Contract-tested; experimental, not live-verified |
-| **Google Gemini** | `gemini-2.5-pro` | 1M | Implemented | Contract-tested; experimental, not live-verified |
-| **Ollama (Local)** | `llama3.3` | 128k | Local runtime | Contract-tested; zero-cost local open weights |
-| **LM Studio (Local)** | `model` | 128k | Local runtime | Contract-tested; OpenAI-compatible local server |
-| **Mock Replayer** | Deterministic | Unlimited | Production ready | Verified in CI test suite |
+| Provider | Status | Live Verification |
+| :--- | :--- | :--- |
+| **OpenAI** | Production ready | **Verified live** (explore, edit, autonomous fix loop) |
+| **Anthropic** | Implemented | Contract-tested; experimental, not live-verified |
+| **Google Gemini** | Implemented | Contract-tested; experimental, not live-verified |
+| **Ollama (Local)** | Local runtime | Contract-tested; zero-cost local open weights |
+| **LM Studio (Local)** | Local runtime | Contract-tested; OpenAI-compatible local server |
+| **Mock Replayer** | Production ready | Verified in CI test suite |
 
-For complete provider setup instructions and model catalogs, see [docs/providers.md](docs/providers.md) and [docs/local-models.md](docs/local-models.md).
+Forge does not ship a model menu. On first launch you type the model ID from your provider. See [docs/providers.md](docs/providers.md) and [docs/local-models.md](docs/local-models.md).
 
 ---
 
@@ -62,9 +62,9 @@ graph TD
     end
 
     subgraph Providers ["Model Providers"]
-        Anthropic["Anthropic (Claude 3.5 Sonnet)"]
-        OpenAI["OpenAI (GPT-4o, o3-mini)"]
-        Gemini["Google Gemini (2.5 Pro)"]
+        Anthropic["Anthropic"]
+        OpenAI["OpenAI"]
+        Gemini["Google Gemini"]
         Mock["Mock Replay Engine"]
     end
 
@@ -104,27 +104,33 @@ cd forge
 go build -o bin/forge ./cmd/forge
 ```
 
-### 2. Configure Your API Key
-Set the environment variable for your preferred provider:
+### 2. First launch
 
-```bash
-# Anthropic (Default)
-export ANTHROPIC_API_KEY="sk-ant-..."
+Open Forge in the repository you want to work in:
 
-# OpenAI
-export OPENAI_API_KEY="sk-proj-..."
-
-# Google Gemini
-export GEMINI_API_KEY="..."
-```
-
-### 3. Run Forge
-
-#### Interactive Mode (TUI)
-Launch Forge in your current repository:
 ```bash
 forge
 ```
+
+When a hosted provider has no saved key, Forge opens a setup screen:
+
+1. Choose a provider: Anthropic, OpenAI, Gemini, Ollama, or LM Studio.
+2. Paste an API key for a hosted provider. The key is stored in the OS keychain and is not written to a config file. Ollama and LM Studio do not ask for a key.
+3. Type the model ID you want to use, exactly as your provider publishes it, and press Enter.
+
+You do not set an environment variable to open the app. If `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY` is already set, that value is used instead of the saved key.
+
+After setup, the chat screen is where you send messages. These commands reopen setup later:
+
+| Command | What it does |
+| :--- | :--- |
+| `/settings` | Choose the provider again, replace the API key, and type a model ID. |
+| `/models` | Switch provider and type a model ID. A provider that already has a saved key skips the key step. |
+| `/model <id>` | Switch to that model ID immediately. |
+
+`forge run "prompt"` and `forge "prompt"` do not open the setup screen. Run `forge` once so a provider, model, and key are saved, or set that provider's environment variable, before a headless run.
+
+### 3. Other ways to run
 
 #### Deterministic Demo (No API Key Required)
 Run a scripted 60-second demonstration fixing a boundary condition bug (works without any external toolchain or Go installed):
@@ -237,7 +243,7 @@ For the complete schema, environment variables, local Ollama setup, and preceden
 | **Slice 5: Autonomous Fix Loop** | `DONE` | Native shell execution, process group kill, stall guard |
 | **Slice 6: Hardening & Release** | `DOING` | Layered config, themes, error guidance, goreleaser (awaiting fresh machine check and demo recording) |
 | **Slice 7: Checkpoints & Undo** | `DOING` | Shadow Git repo, atomic rollback, benchmarked on 10k files (awaiting live run) |
-| **Slice 8: Onboarding & Credentials** | `DOING` | OS keychain storage, `forge auth`, provider profiles, local runtimes, first-run wizard (awaiting live run) |
+| **Slice 8: Onboarding & Credentials** | `DOING` | First launch opens setup: provider, OS-keychain API key, and a model ID you type. `/settings` and `/models` reopen it (awaiting live run) |
 | **Slice 9: Sessions & Persistence** | `DOING` | SQLite persistence, crash-safety synthesis, resume CLI & picker, undo continuity (awaiting live run) |
 | **Slice 9a: Policy & Audit Log** | `DOING` | Layered policy files, tamper-evident audit log, secrets redaction (awaiting live run) |
 | **Desktop App (Wails)** | `PARKED` | Planned for Phase 2 |

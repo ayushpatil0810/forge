@@ -37,14 +37,20 @@ Ollama is the simplest way to run local models on macOS, Linux, and Windows.
    ```bash
    ollama pull qwen2.5-coder:7b
    ```
-3. **Run Forge**:
+3. **Run Forge** and type that model ID:
+   ```bash
+   forge
+   ```
+   On the setup screen, choose Ollama and enter the ID you pulled, such as `qwen2.5-coder:7b`. No API key is required.
+
+   From a chat that is already open:
+   ```text
+   /models
+   /model qwen2.5-coder:7b
+   ```
+   Or start with the flags directly:
    ```bash
    forge --provider ollama --model qwen2.5-coder:7b
-   ```
-   Or inside the interactive TUI:
-   ```text
-   /provider ollama
-   /model qwen2.5-coder:7b
    ```
 
 Forge automatically defaults the endpoint to `http://127.0.0.1:11434`.
@@ -59,11 +65,16 @@ LM Studio offers a visual interface for managing and running GGUF models.
    - Go to the **Local Server** tab (developer icon).
    - Load the model and click **Start Server**.
    - Note the server port (default is `1234`).
-4. **Run Forge**:
+4. **Run Forge** and type the model ID shown by LM Studio:
    ```bash
-   forge --provider lmstudio --model model
+   forge
    ```
-   Forge automatically connects to `http://127.0.0.1:1234/v1`.
+   Choose LM Studio on the setup screen. No API key is required. Forge connects to `http://127.0.0.1:1234/v1`.
+
+   The same ID can be passed on the command line:
+   ```bash
+   forge --provider lmstudio --model <model-id>
+   ```
 
 ---
 

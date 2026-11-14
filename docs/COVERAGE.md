@@ -58,7 +58,7 @@ This document tracks implementation status, delivery slices, and automated test 
 | `L-4` | Gemini implementation | P1 | `DONE` | Slice 3b | `internal/llm/gemini/gemini.go` (SSE streaming, function calling); contract-tested in `gemini_test.go` (experimental, not live-verified) |
 | `L-5` | Ollama / local models via loopback & custom base URL | P1 | `DONE` | Slice 8 | `internal/credentials/`, `internal/llm/openai/local_contract_test.go`, `docs/local-models.md`, `docs/providers.md`; tested in `TestLocalOpenAIContract_Ollama` |
 | `L-6` | Model catalog with context window & pricing metadata | P1 | `DONE` | Slice 2 & 3b | `internal/llm/anthropic/models.go`, `internal/llm/openai/models.go`, `internal/llm/gemini/models.go`; tested in unit tests |
-| `L-7` | Mid-session model switching (`/model`, `/provider`) | P1 | `DONE` | Slice 8 | `internal/tui/app.go` (`/model`, `/provider`, `/auth`), context window validation; tested in `internal/tui/app_test.go` |
+| `L-7` | Mid-session model switching (`/model <id>`, `/models`, `/settings`) | P1 | `DONE` | Slice 8 | Setup asks for a typed model ID and stores the key in the OS keychain. `/model` does not print a model menu. Known IDs still get a context-window check. Tested in `internal/tui/app_test.go` |
 | `L-8` | Prompt caching support | P2 | `PARKED` | Phase 2 | Parked for Phase 2 |
 
 ---

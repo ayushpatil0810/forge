@@ -87,11 +87,12 @@ func checkForbiddenKeyFlags(args []string) error {
 
 func newRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "forge [flags] [prompt]",
-		Short:        "Forge is a provider-agnostic terminal AI coding agent",
-		Version:      version,
-		SilenceUsage: true,
-		Args:         cobra.ArbitraryArgs,
+		Use:           "forge [flags] [prompt]",
+		Short:         "Forge is a provider-agnostic terminal AI coding agent",
+		Version:       version,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Args:          cobra.ArbitraryArgs,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			return checkForbiddenKeyFlags(os.Args[1:])
 		},
@@ -1211,19 +1212,17 @@ func runInteractive(ctx context.Context) error {
 		modelName = cfg.Model
 		credMgr := credentials.NewManager(nil)
 		cred := credMgr.Resolve(cfg.Provider)
-		if cred.Source == credentials.SourceNone && cfg.Provider != "ollama" && cfg.Provider != "lmstudio" {
-			needsWizard = true
-		}
-		p, err := llm.NewProvider(llm.ProviderConfig{
-			Provider: cfg.Provider,
-			Model:    cfg.Model,
-			BaseURL:  cfg.BaseURL,
-			APIKey:   cred.Key,
-		})
+		missingKey := cred.Source == credentials.SourceNone || strings.TrimSpace(cred.Key) == ""
+		p, wizard, err := openInteractiveProvider(cfg.Provider, cfg.Model, cfg.BaseURL, cred.Key, missingKey)
 		if err != nil {
 			return ExitCodeError{Code: 2, Err: err}
 		}
 		provider = p
+		needsWizard = wizard
+		if needsWizard {
+			providerName = "not configured"
+			modelName = "—"
+		}
 		sh := tools.DetectShell(cfg.Shell)
 		toolRegistry = tools.DefaultToolsWithEnvAllow(cfg.WorkspaceRoot, bashEnvAllow(cfg), sh)
 	}
@@ -1315,6 +1314,7 @@ func runInteractive(ctx context.Context) error {
 		m.RestoreSession(resumedData)
 	}
 	if needsWizard {
+		m.SetSetupRequired(true)
 		m.SetWizard(tui.NewWizardState())
 	}
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())

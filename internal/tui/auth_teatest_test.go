@@ -113,7 +113,10 @@ func TestSlice8_RealAuthTeatestExitCheck(t *testing.T) {
 		// Advance past Step 2 (no key prompt)
 		tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
 
-		// 3. Wizard Step 3: Pick model (llama3.3)
+		// 3. Wizard Step 3: Type the model ID
+		for _, ch := range "llama3.3" {
+			tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+		}
 		tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
 
 		// 4. Wizard Step 4: Done screen -> press Enter to start coding
@@ -236,7 +239,10 @@ func TestSlice8_RealAuthTeatestExitCheck(t *testing.T) {
 			t.Fatalf("expected key %q in keychain, got err=%v, val=%q", fakeSecretKey, err, storedVal)
 		}
 
-		// 3. Step 3: Pick model (gpt-4o)
+		// 3. Step 3: Type the model ID
+		for _, ch := range "gpt-4o" {
+			tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+		}
 		tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
 		time.Sleep(50 * time.Millisecond)
 
