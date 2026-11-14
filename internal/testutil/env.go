@@ -32,6 +32,9 @@ func IsolateTestEnvironment() (string, func()) {
 	if err != nil {
 		panic(fmt.Sprintf("failed to create isolated temp home: %v", err))
 	}
+	if realDir, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = realDir
+	}
 	isolatedTempDir = dir
 
 	origEnv := map[string]string{
@@ -50,6 +53,7 @@ func IsolateTestEnvironment() (string, func()) {
 	xdgConfig := filepath.Join(dir, ".config")
 	xdgData := filepath.Join(dir, ".local", "share")
 	xdgCache := filepath.Join(dir, ".cache")
+	macConfig := filepath.Join(dir, "Library", "Application Support")
 
 	_ = os.Setenv("FORGE_ISOLATED_TEST_DIR", dir)
 	_ = os.Setenv("HOME", dir)
@@ -65,6 +69,7 @@ func IsolateTestEnvironment() (string, func()) {
 	_ = os.MkdirAll(xdgConfig, 0o700)
 	_ = os.MkdirAll(xdgData, 0o700)
 	_ = os.MkdirAll(xdgCache, 0o700)
+	_ = os.MkdirAll(macConfig, 0o700)
 
 	cleanup := func() {
 		isoMu.Lock()
@@ -103,26 +108,36 @@ func AssertIsolatedHome(t *testing.T) {
 		t.Fatalf("GUARD FAILURE: test environment was not isolated with testutil.IsolateTestEnvironment()")
 	}
 
-	normIso, err := filepath.EvalSymlinks(iso)
-	if err != nil {
-		normIso = filepath.Clean(iso)
+	normIso := filepath.Clean(iso)
+	if realIso, err := filepath.EvalSymlinks(iso); err == nil {
+		normIso = realIso
 	}
-	normHome, err := filepath.EvalSymlinks(home)
-	if err != nil {
-		normHome = filepath.Clean(home)
+	normHome := filepath.Clean(home)
+	if realHome, err := filepath.EvalSymlinks(home); err == nil {
+		normHome = realHome
 	}
-	normCfg, err := filepath.EvalSymlinks(cfgDir)
-	if err != nil {
-		normCfg = filepath.Clean(cfgDir)
+	normCfg := filepath.Clean(cfgDir)
+	if realCfg, err := filepath.EvalSymlinks(cfgDir); err == nil {
+		normCfg = realCfg
 	}
 
 	relHome, errHome := filepath.Rel(normIso, normHome)
 	if errHome != nil || strings.HasPrefix(relHome, "..") {
-		t.Fatalf("GUARD FAILURE: os.UserHomeDir() %q resolved outside isolated test directory %q", home, iso)
+		cleanIso := filepath.Clean(iso)
+		cleanHome := filepath.Clean(home)
+		relClean, errClean := filepath.Rel(cleanIso, cleanHome)
+		if (errClean != nil || strings.HasPrefix(relClean, "..")) && !strings.HasPrefix(cleanHome, cleanIso) {
+			t.Fatalf("GUARD FAILURE: os.UserHomeDir() %q resolved outside isolated test directory %q", home, iso)
+		}
 	}
 
 	relCfg, errCfg := filepath.Rel(normIso, normCfg)
 	if errCfg != nil || strings.HasPrefix(relCfg, "..") {
-		t.Fatalf("GUARD FAILURE: os.UserConfigDir() %q resolved outside isolated test directory %q", cfgDir, iso)
+		cleanIso := filepath.Clean(iso)
+		cleanCfg := filepath.Clean(cfgDir)
+		relClean, errClean := filepath.Rel(cleanIso, cleanCfg)
+		if (errClean != nil || strings.HasPrefix(relClean, "..")) && !strings.HasPrefix(cleanCfg, cleanIso) {
+			t.Fatalf("GUARD FAILURE: os.UserConfigDir() %q resolved outside isolated test directory %q", cfgDir, iso)
+		}
 	}
 }
