@@ -158,3 +158,52 @@ func TestStore_DiscardCompactionsAfter(t *testing.T) {
 		t.Fatalf("expected c_early remaining, got %q", remaining[0].ID)
 	}
 }
+
+func TestStore_DiscardCompactionsAfter_NonUTCTimezone(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "discard_compact_tz_test.db")
+
+	store, err := session.NewStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	sessID := "s_discard_compact_tz"
+	_ = store.CreateSession(ctx, session.SessionRecord{
+		ID:        sessID,
+		Workspace: tempDir,
+		Provider:  "mock",
+		Model:     "mock-model",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	})
+
+	utcCompactionTime := time.Date(2026, 11, 23, 14, 35, 0, 0, time.UTC)
+	_ = store.SaveCompaction(ctx, session.CompactionRecord{
+		ID:             "c_utc",
+		SessionID:      sessID,
+		Tier:           1,
+		Summary:        "Compaction stored in UTC",
+		FirstMessageID: "m1",
+		LastMessageID:  "m2",
+		CreatedAt:      utcCompactionTime,
+	})
+
+	// Checkpoint taken at 14:30 UTC, but in local time (e.g. IST +05:30 -> 20:00:00)
+	loc := time.FixedZone("IST", 5*3600+1800)
+	localCheckpointTime := time.Date(2026, 11, 23, 20, 0, 0, 0, loc)
+
+	if err := store.DiscardCompactionsAfter(ctx, sessID, localCheckpointTime); err != nil {
+		t.Fatalf("DiscardCompactionsAfter failed: %v", err)
+	}
+
+	remaining, err := store.GetCompactions(ctx, sessID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("expected 0 compactions remaining after non-UTC discard, got %d", len(remaining))
+	}
+}

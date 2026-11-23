@@ -418,12 +418,19 @@ func (m *Manager) Restore(ctx context.Context, id string) (*Checkpoint, error) {
 		shortID = shortID[:8]
 	}
 
+	ts := time.Now()
+	if out, err := m.git(ctx, "log", "-1", "--format=%ct", targetCommit); err == nil {
+		if sec, parseErr := strconv.ParseInt(strings.TrimSpace(out), 10, 64); parseErr == nil {
+			ts = time.Unix(sec, 0)
+		}
+	}
+
 	return &Checkpoint{
 		ID:        shortID,
 		Commit:    targetCommit,
 		Tree:      targetTree,
 		Message:   "Restored to " + id,
-		Timestamp: time.Now(),
+		Timestamp: ts,
 	}, nil
 }
 

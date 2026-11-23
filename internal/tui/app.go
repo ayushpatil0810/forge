@@ -152,9 +152,10 @@ type Model struct {
 	toolCards       map[string]*ToolCard
 	toolsExpanded   bool
 	currentResponse string
-	activityLabel   string
-	isStreaming     bool
-	renderPending   bool
+	activityLabel    string
+	isStreaming      bool
+	manualCompaction bool
+	renderPending    bool
 	inputTokens     int
 	outputTokens    int
 	cost            float64
@@ -902,6 +903,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.items = append(m.items, userMessage{text: input})
 				m.textarea.Reset()
 				focus := strings.TrimSpace(strings.TrimPrefix(input, "/compact"))
+				m.manualCompaction = true
 				m.activityLabel = "Compacting context..."
 				m.isStreaming = true
 				m.updateViewportContent()
@@ -1270,12 +1272,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case agent.EventCompactionFinished:
-			if ev.CompactionDone != nil && ev.CompactionDone.OK {
-				line := fmt.Sprintf("Compacted context: %s → %s tokens",
-					formatTokenCount(ev.CompactionDone.TokensBefore),
-					formatTokenCount(ev.CompactionDone.TokensAfter),
-				)
-				m.items = append(m.items, systemMessage{text: line})
+			if m.manualCompaction {
+				m.manualCompaction = false
+				m.isStreaming = false
+				m.activityLabel = "Ready"
+			} else {
+				m.activityLabel = "Thinking..."
+			}
+			if ev.CompactionDone != nil {
+				if ev.CompactionDone.OK {
+					line := fmt.Sprintf("Compacted context: %s → %s tokens",
+						formatTokenCount(ev.CompactionDone.TokensBefore),
+						formatTokenCount(ev.CompactionDone.TokensAfter),
+					)
+					m.items = append(m.items, systemMessage{text: line})
+				} else if ev.CompactionDone.Error != "" {
+					m.items = append(m.items, errorMessage{text: fmt.Sprintf("Compaction failed: %s", ev.CompactionDone.Error)})
+				}
 				m.updateViewportContent()
 			}
 

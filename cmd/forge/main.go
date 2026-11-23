@@ -283,6 +283,13 @@ func newCheckpointsCmd() *cobra.Command {
 			if err != nil {
 				return ExitCodeError{Code: 1, Err: err}
 			}
+			if store, err := session.NewStore(""); err == nil {
+				defer func() { _ = store.Close() }()
+				sessions, err := store.ListSessions(cmd.Context(), session.CanonicalWorkspace(rootFlag), false)
+				if err == nil && len(sessions) > 0 {
+					_ = store.DiscardCompactionsAfter(cmd.Context(), sessions[0].ID, info.Timestamp)
+				}
+			}
 			cmd.Printf("Successfully restored workspace to checkpoint %s\n", info.ID)
 			return nil
 		},

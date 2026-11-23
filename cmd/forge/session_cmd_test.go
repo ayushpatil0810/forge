@@ -253,3 +253,75 @@ func TestUndo_UncompactsCompactions(t *testing.T) {
 		t.Fatalf("expected 0 compactions after undo reverting before compaction, got %d: %+v", len(compactionsAfter), compactionsAfter)
 	}
 }
+
+func TestCheckpointsRestore_UncompactsCompactions(t *testing.T) {
+	resetCLIFlags()
+	t.Cleanup(resetCLIFlags)
+
+	ws := t.TempDir()
+	store, err := session.NewStore("")
+	if err != nil {
+		t.Fatalf("NewStore failed: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	sessID := "s_restore_compact_test"
+	_ = store.CreateSession(ctx, session.SessionRecord{
+		ID:        sessID,
+		Workspace: session.CanonicalWorkspace(ws),
+		Provider:  "mock",
+		Model:     "mock-model",
+		Title:     "Restore compact test",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	})
+
+	chkMgr, err := checkpoint.New(ws)
+	if err != nil {
+		t.Fatalf("checkpoint.New failed: %v", err)
+	}
+	cp1, err := chkMgr.Create(ctx, "Checkpoint 1")
+	if err != nil {
+		t.Fatalf("Create cp1 failed: %v", err)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+
+	compTime := time.Now().UTC()
+	_ = store.SaveCompaction(ctx, session.CompactionRecord{
+		ID:             "cmp_after_cp1",
+		SessionID:      sessID,
+		Tier:           2,
+		Summary:        "Compaction created after cp1",
+		FirstMessageID: "m1",
+		LastMessageID:  "m2",
+		CreatedAt:      compTime,
+	})
+
+	time.Sleep(10 * time.Millisecond)
+
+	_, err = chkMgr.Create(ctx, "Checkpoint 2")
+	if err != nil {
+		t.Fatalf("Create cp2 failed: %v", err)
+	}
+
+	compactionsBefore, _ := store.GetCompactions(ctx, sessID)
+	if len(compactionsBefore) != 1 {
+		t.Fatalf("expected 1 compaction before restore, got %d", len(compactionsBefore))
+	}
+
+	rootCmd := newRootCmd()
+	rootFlag = ws
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetArgs([]string{"checkpoints", "restore", cp1.ID, "--root", ws})
+	if err := rootCmd.ExecuteContext(ctx); err != nil {
+		t.Fatalf("checkpoints restore command failed: %v", err)
+	}
+
+	compactionsAfter, _ := store.GetCompactions(ctx, sessID)
+	if len(compactionsAfter) != 0 {
+		t.Fatalf("expected 0 compactions after restore reverting before compaction, got %d: %+v", len(compactionsAfter), compactionsAfter)
+	}
+}
