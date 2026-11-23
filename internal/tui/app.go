@@ -148,25 +148,25 @@ type Model struct {
 	height int
 	ready  bool
 
-	items           []messageItem
-	toolCards       map[string]*ToolCard
-	toolsExpanded   bool
-	currentResponse string
+	items            []messageItem
+	toolCards        map[string]*ToolCard
+	toolsExpanded    bool
+	currentResponse  string
 	activityLabel    string
 	isStreaming      bool
 	manualCompaction bool
 	renderPending    bool
-	inputTokens     int
-	outputTokens    int
-	cost            float64
-	providerName    string
-	modelName       string
-	baseURL         string
-	version         string
-	branch          string
-	workspaceRoot   string
-	store           *session.Store
-	noSession       bool
+	inputTokens      int
+	outputTokens     int
+	cost             float64
+	providerName     string
+	modelName        string
+	baseURL          string
+	version          string
+	branch           string
+	workspaceRoot    string
+	store            *session.Store
+	noSession        bool
 
 	auditWarning          string
 	pendingApproval       *agent.ApprovalRequestedPayload
