@@ -115,7 +115,8 @@ func New(cfg Config) (*Provider, error) {
 
 	client := cfg.Client
 	if client == nil {
-		client = &http.Client{Timeout: 60 * time.Second}
+		// Streaming responses rely on context deadlines rather than static client timeout.
+		client = &http.Client{}
 	}
 
 	return &Provider{

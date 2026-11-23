@@ -198,4 +198,24 @@ func TestTUI_Command_Compact(t *testing.T) {
 	if !m.isStreaming {
 		t.Fatal("expected isStreaming to be true while compaction runs")
 	}
+
+	// Verify EventCompactionFinished unfreezes the TUI back to ready state
+	doneMsg := agent.Event{
+		Type: agent.EventCompactionFinished,
+		CompactionDone: &agent.CompactionFinishedPayload{
+			Tier:         2,
+			TokensBefore: 5000,
+			TokensAfter:  2000,
+			OK:           true,
+		},
+	}
+	newM, _ = m.Update(doneMsg)
+	m = newM.(Model)
+
+	if m.isStreaming {
+		t.Fatal("expected isStreaming to be false after compaction completes")
+	}
+	if m.activityLabel != "Ready" {
+		t.Fatalf("expected activityLabel 'Ready', got %q", m.activityLabel)
+	}
 }

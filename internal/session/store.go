@@ -367,6 +367,12 @@ func (s *Store) SaveMessage(ctx context.Context, m MessageRecord) error {
 	if err != nil {
 		return err
 	}
+	createdAt := m.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	} else {
+		createdAt = createdAt.UTC()
+	}
 	query := `INSERT INTO messages (id, session_id, role, content, tool_call_id, created_at) VALUES (?, ?, ?, ?, ?, ?)`
 	_, err = db.ExecContext(ctx, query,
 		m.ID,
@@ -374,11 +380,11 @@ func (s *Store) SaveMessage(ctx context.Context, m MessageRecord) error {
 		m.Role,
 		sanitize(m.Content),
 		m.ToolCallID,
-		m.CreatedAt.UTC(),
+		createdAt,
 	)
 	if err == nil {
 		// update session updated_at
-		_, _ = db.ExecContext(ctx, "UPDATE sessions SET updated_at = ? WHERE id = ?", m.CreatedAt.UTC(), m.SessionID)
+		_, _ = db.ExecContext(ctx, "UPDATE sessions SET updated_at = ? WHERE id = ?", createdAt, m.SessionID)
 	}
 	return err
 }
@@ -619,7 +625,8 @@ func (s *Store) DiscardCompactionsAfter(ctx context.Context, sessionID string, a
 		_ = tx.Rollback()
 	}()
 
-	_, err = tx.ExecContext(ctx, "DELETE FROM compactions WHERE session_id = ? AND created_at > ?", sessionID, after)
+	afterUTC := after.UTC()
+	_, err = tx.ExecContext(ctx, "DELETE FROM compactions WHERE session_id = ? AND created_at > ?", sessionID, afterUTC)
 	if err != nil {
 		return fmt.Errorf("deleting compactions after %v: %w", after, err)
 	}

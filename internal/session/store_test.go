@@ -719,3 +719,56 @@ func BenchmarkSession_Resume500Messages(b *testing.B) {
 		}
 	}
 }
+
+func TestStore_SaveMessage_ZeroCreatedAt(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "test_zero_created_at.db")
+	store, err := session.NewStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	sessID := "test_sess_zero"
+	before := time.Now().UTC().Add(-time.Second)
+	err = store.CreateSession(ctx, session.SessionRecord{
+		ID:        sessID,
+		Title:     "Zero CreatedAt Session",
+		CreatedAt: before,
+		UpdatedAt: before,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = store.SaveMessage(ctx, session.MessageRecord{
+		ID:        "msg_zero",
+		SessionID: sessID,
+		Role:      "user",
+		Content:   "Hello",
+		// CreatedAt left as zero value
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msgs, err := store.GetMessages(ctx, sessID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].CreatedAt.IsZero() || msgs[0].CreatedAt.Before(before) {
+		t.Errorf("expected non-zero recent CreatedAt, got %v", msgs[0].CreatedAt)
+	}
+
+	sess, err := store.GetSession(ctx, sessID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.UpdatedAt.Before(before) {
+		t.Errorf("expected session UpdatedAt >= before, got %v", sess.UpdatedAt)
+	}
+}

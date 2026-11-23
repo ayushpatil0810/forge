@@ -35,7 +35,7 @@ func isLockHeldError(err error) bool {
 
 // acquireLock acquires an exclusive inter-process lock on the shadow repository.
 // It retries until the timeout expires or the context is cancelled.
-// If an existing lock file is stale (> 30s old), it is automatically cleaned up.
+// If an existing lock file is stale (> 60s old), it is automatically cleaned up.
 func acquireLock(ctx context.Context, lockPath string, timeout time.Duration) (*fileLock, error) {
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0700); err != nil {
 		return nil, fmt.Errorf("creating lock directory: %w", err)
@@ -52,20 +52,7 @@ func acquireLock(ctx context.Context, lockPath string, timeout time.Duration) (*
 		}
 
 		if !isLockHeldError(err) {
-			// If parent directory didn't exist, create it and retry
-			if mkErr := os.MkdirAll(filepath.Dir(lockPath), 0700); mkErr == nil {
-				f2, err2 := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
-				if err2 == nil {
-					_, _ = fmt.Fprintf(f2, "pid: %d\ntime: %d\n", os.Getpid(), time.Now().Unix())
-					_ = f2.Sync()
-					return &fileLock{path: lockPath, file: f2}, nil
-				}
-				if !isLockHeldError(err2) {
-					return nil, fmt.Errorf("creating lock file: %w", err2)
-				}
-			} else {
-				return nil, fmt.Errorf("creating lock file: %w", err)
-			}
+			return nil, fmt.Errorf("creating lock file: %w", err)
 		}
 
 		// Lock exists: check if stale (> 60s)
