@@ -151,7 +151,7 @@ func TestSlice8_AuthAndHeadlessExitCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = store.Close() }()
-	rows, err := store.ListSessions(ctx, wsDir, false)
+	rows, err := store.ListSessions(ctx, session.CanonicalWorkspace(wsDir), false)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("expected a persisted session, got %d (%v)", len(rows), err)
 	}
