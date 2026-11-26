@@ -86,6 +86,7 @@ func (l *Logger) Log(_ context.Context, sessionID, event, tool, actionSummary, d
 	var outSHA string
 	var outSize *int
 	if output != "" {
+		output = redact.Redact(output)
 		s := len(output)
 		outSize = &s
 		h := sha256.Sum256([]byte(output))
@@ -97,10 +98,10 @@ func (l *Logger) Log(_ context.Context, sessionID, event, tool, actionSummary, d
 		SessionID:      sessionID,
 		Seq:            seq,
 		Event:          event,
-		Tool:           tool,
+		Tool:           redact.Redact(tool),
 		ActionSummary:  cleanSummary,
 		Decision:       decision,
-		DecisionSource: decisionSource,
+		DecisionSource: redact.Redact(decisionSource),
 		ExitCode:       exitCode,
 		DurationMs:     durationMs,
 		OutputSize:     outSize,

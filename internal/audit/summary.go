@@ -23,7 +23,7 @@ func SummarizeAction(tool, input string) string {
 	case "write_file", "edit_file":
 		return fileSummary(tool, input)
 	default:
-		return capSummary(redact.Redact(input))
+		return capSummary(redact.JSON(input))
 	}
 }
 

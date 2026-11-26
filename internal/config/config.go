@@ -148,12 +148,12 @@ func CheckInsecureBaseURL(baseURL string) string {
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Hostname() == "" {
-		return fmt.Sprintf("SEC-6: Custom base_url %q is not a valid URL.", baseURL)
+		return "SEC-6: Custom base_url is not a valid URL."
 	}
 	if isLoopbackHost(u.Hostname()) {
 		return ""
 	}
-	return fmt.Sprintf("SEC-6: Custom base_url %q transmits API keys in cleartext over insecure HTTP. Use HTTPS or a loopback address.", baseURL)
+	return fmt.Sprintf("SEC-6: Custom base_url host %q transmits API keys in cleartext over insecure HTTP. Use HTTPS or a loopback address.", u.Hostname())
 }
 
 func isLoopbackHost(host string) bool {
@@ -602,6 +602,9 @@ func applyEnv(dst *Config) {
 	if v := os.Getenv("FORGE_PROVIDER"); v != "" {
 		oldProvider := dst.Provider
 		dst.Provider = v
+		if !strings.EqualFold(oldProvider, v) {
+			dst.BaseURL, dst.baseURLRank = "", rankBaseDefault
+		}
 		if os.Getenv("FORGE_MODEL") == "" && oldProvider != v {
 			dst.Model = DefaultModelForProvider(v)
 		}
@@ -686,6 +689,9 @@ func applyOptions(dst *Config, opts LoadOptions) {
 	if opts.Provider != "" {
 		oldProvider := dst.Provider
 		dst.Provider = opts.Provider
+		if !strings.EqualFold(oldProvider, opts.Provider) && (dst.baseURLRank == rankBaseUser || os.Getenv("FORGE_PROVIDER") != "") {
+			dst.BaseURL, dst.baseURLRank = "", rankBaseDefault
+		}
 		if opts.Model == "" && oldProvider != opts.Provider {
 			dst.Model = DefaultModelForProvider(opts.Provider)
 		}

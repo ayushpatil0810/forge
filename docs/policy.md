@@ -53,34 +53,34 @@ When a tool execution is requested, Forge evaluates rules in the following stric
 
 ```mermaid
 flowchart TD
-    Req[Tool Execution Request] --> FloorCheck{Safety Floor?<br/>Dangerous / Protected / Opaque / Hazard}
-    FloorCheck -- Yes --> FloorPrompt[Prompt User in Ask/YOLO<br/>Auto-Deny in Plan/Headless]
-    FloorCheck -- No --> DenyCheck{Matches Deny Rule?<br/>Project or User}
+    Req[Tool Execution Request] --> DenyCheck{Matches Deny Rule?<br/>Project or User}
     DenyCheck -- Yes --> DenyAction[Deny Action<br/>Applies even in YOLO]
-    DenyCheck -- No --> AskCheck{Matches Ask Rule?<br/>Project or User}
+    DenyCheck -- No --> FloorCheck{Safety Floor?<br/>Dangerous / Protected / Opaque / Hazard}
+    FloorCheck -- Yes --> FloorPrompt[Ask in interactive mode<br/>Deny in headless mode or for plan mutations]
+    FloorCheck -- No --> PlanCheck{Non-read action in plan mode?}
+    PlanCheck -- Yes --> DenyAction
+    PlanCheck -- No --> AskCheck{Matches Ask Rule?<br/>Project or User}
     AskCheck -- Yes --> AskAction[Prompt User for Confirmation]
     AskCheck -- No --> AllowCheck{Matches Allow Rule?<br/>User Policy Only}
-    AllowCheck -- Yes --> AllowModeCheck{Mode is Plan?}
-    AllowModeCheck -- Yes --> DenyAction
-    AllowModeCheck -- No --> AllowAction[Execute Without Prompt]
+    AllowCheck -- Yes --> AllowAction[Execute Without Prompt]
     AllowCheck -- No --> ModeDefault[Apply Permission Mode Default<br/>ask / accept-edits / plan / yolo]
 ```
 
-1. **Hard Safety Floor**:
+1. **Deny Rules**
+   - A matching user or project `deny` blocks the action in every mode, including actions that would otherwise prompt under the safety floor.
+2. **Hard Safety Floor**
    - Protected paths (`.git/**`, `.env*`, `.ssh/**`, `.aws/**`, keys, credentials)
    - Dangerous command patterns (`rm -rf /`, `mkfs`, `dd`, `shutdown`, etc.)
    - Opaque shell commands (command substitutions, redirections, here-docs, `eval`, `iex`)
    - Known argument hazards (`go test -exec`, `git -c`, etc.)
-   *Safety floor actions are never auto-allowed by any rule.* They prompt the user in `ask`, `accept-edits`, and `yolo` modes, and are auto-denied in `plan` mode and headless runs.
-2. **Deny Rules**:
-   - Any matching `deny` rule (from project or user policy) immediately blocks the action.
-   - Deny rules apply unconditionally, even in `--yolo` mode.
-3. **Ask Rules**:
-   - Any matching `ask` rule forces an interactive confirmation prompt.
-4. **Allow Rules**:
+   Safety-floor actions require interactive approval. Headless runs and plan-mode mutations are denied. Protected reads can still prompt in interactive plan mode.
+3. **Plan Mode**
+   - File edits and shell commands are denied before any `ask` or `allow` rule can authorize them.
+4. **Ask Rules**
+   - A matching `ask` rule requires approval, subject to the headless approval policy.
+5. **Allow Rules**
    - Matching `allow` rules from user policy permit execution without prompting.
-   - Plan mode still denies all mutating actions (writes and commands) regardless of allow rules.
-5. **Mode Default**:
+6. **Mode Default**
    - If no specific rule matched and no floor triggered, the active permission mode decides:
      - `ask`: reads free; file edits and commands prompt.
      - `accept-edits`: reads and file edits free; commands prompt.

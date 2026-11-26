@@ -1,11 +1,17 @@
 package redact
 
 import (
+	"encoding/json"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
 )
+
+var secretEnv = []string{
+	"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+	"AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN",
+}
 
 var (
 	registeredMu      sync.RWMutex
@@ -38,8 +44,8 @@ func ClearSecrets() {
 // High-confidence regex patterns for sensitive credentials.
 // Negatives (Git commit SHAs, UUIDs, generic hex/base64) must not be matched.
 var (
-	// Private key blocks (PEM format)
-	rePrivateKey = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----`)
+	// Capture the closing marker so streams can distinguish complete blocks.
+	rePrivateKey = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:(-----END [A-Z0-9 ]*PRIVATE KEY-----)|$)`)
 
 	// AWS Access Key ID (AKIA or ASIA followed by 16 uppercase alphanumeric chars)
 	reAWSKey = regexp.MustCompile(`\b(AKIA|ASIA)[0-9A-Z]{16}\b`)
@@ -55,6 +61,7 @@ var (
 
 	// Google Gemini API keys
 	reGeminiKey = regexp.MustCompile(`\b(AIza[0-9A-Za-z_\-]{20,})\b`)
+	reJSONValue = regexp.MustCompile(`"(?:[^"\\]|\\.)*"|-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?`)
 )
 
 // Redact replaces recognized secrets and credentials in text with [REDACTED:<type>].
@@ -76,14 +83,7 @@ func Redact(s string) string {
 	registeredMu.RUnlock()
 
 	// 2. Known environment variables carrying keys
-	for _, envVar := range []string{
-		"OPENAI_API_KEY",
-		"ANTHROPIC_API_KEY",
-		"GEMINI_API_KEY",
-		"GOOGLE_API_KEY",
-		"AWS_SECRET_ACCESS_KEY",
-		"GITHUB_TOKEN",
-	} {
+	for _, envVar := range secretEnv {
 		val := strings.TrimSpace(os.Getenv(envVar))
 		if len(val) >= 8 && strings.Contains(res, val) {
 			res = strings.ReplaceAll(res, val, "[REDACTED:api_key]")
@@ -99,4 +99,23 @@ func Redact(s string) string {
 	res = reGeminiKey.ReplaceAllString(res, "[REDACTED:gemini_key]")
 
 	return res
+}
+
+// JSON redacts decoded values so escapes cannot hide a credential or break the JSON.
+func JSON(input string) string {
+	if !json.Valid([]byte(input)) {
+		return Redact(input)
+	}
+	return reJSONValue.ReplaceAllStringFunc(input, func(token string) string {
+		value := token
+		if token[0] == '"' {
+			_ = json.Unmarshal([]byte(token), &value)
+		}
+		clean := Redact(value)
+		if clean == value {
+			return token
+		}
+		encoded, _ := json.Marshal(clean)
+		return string(encoded)
+	})
 }

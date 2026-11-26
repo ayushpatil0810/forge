@@ -95,6 +95,18 @@ func TestPolicyEvaluationTable(t *testing.T) {
 
 		// Deny precedence cases
 		{
+			name:      "Deny takes precedence over a protected read prompt",
+			mode:      permission.ModeYOLO,
+			projRules: []string{"read(example.txt)"},
+			req: EvalRequest{
+				ToolName:    "read_file",
+				Path:        "example.txt",
+				IsProtected: true,
+			},
+			wantVerdict: permission.Deny,
+			wantSource:  "rule:read(example.txt)",
+		},
+		{
 			name:      "Deny takes precedence over Allow in YOLO mode",
 			mode:      permission.ModeYOLO,
 			userRules: []string{"bash(*)"},
@@ -245,6 +257,28 @@ func TestPolicyEvaluationTable(t *testing.T) {
 				t.Errorf("Evaluate() source = %q, want %q", res.Source, tt.wantSource)
 			}
 		})
+	}
+}
+
+func TestPlanModeKeepsToolRequestsReadOnly(t *testing.T) {
+	rule, err := ParseRule(ActionAsk, "edit(example.txt)", ScopeProject, "project.json", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := &PolicySet{ProjectRules: []Rule{rule}}
+	for _, headless := range []bool{false, true} {
+		res := Evaluate(EvalRequest{
+			ToolName: "write_file", Path: "example.txt", Mode: permission.ModePlan,
+			IsHeadless: headless, AutoApprove: headless,
+		}, set)
+		if res.Verdict != permission.Deny {
+			t.Errorf("plan write (headless=%t): got verdict %v, want Deny", headless, res.Verdict)
+		}
+	}
+	for _, tool := range []string{"read_file", "list_dir", "glob", "grep"} {
+		if res := Evaluate(EvalRequest{ToolName: tool, Mode: permission.ModePlan}, set); res.Verdict != permission.Allow {
+			t.Errorf("plan %s: got verdict %v, want Allow", tool, res.Verdict)
+		}
 	}
 }
 

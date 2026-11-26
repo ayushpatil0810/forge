@@ -1,9 +1,62 @@
 package redact
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
+
+func TestJSONRedactsEscapedValuesWithDuplicateFields(t *testing.T) {
+	ClearSecrets()
+	t.Cleanup(ClearSecrets)
+	RegisterSecret("fixture \"key\" value")
+	input := "{\"text\":\"fixture \\u0022key\\u0022 value\",\"text\":\"ordinary\",\"n\":9007199254740993}"
+	got := JSON(input)
+	if !json.Valid([]byte(got)) || got != "{\"text\":\"[REDACTED:secret]\",\"text\":\"ordinary\",\"n\":9007199254740993}" {
+		t.Fatal("redaction changed the JSON structure or left an escaped credential in it")
+	}
+}
+
+func TestStreamRetainsOpenPrivateKeyAndSplitEnvironmentCredential(t *testing.T) {
+	const key = "fixture key with spaces"
+	t.Setenv("OPENAI_API_KEY", key)
+	var output strings.Builder
+	stream := NewStream(func(chunk string) { output.WriteString(chunk) })
+	stream.Write("visible ")
+	stream.Write("fixture key ")
+	if output.String() != "visible " {
+		t.Fatal("stream did not emit safe text or emitted a credential prefix")
+	}
+	stream.Write("with spaces\n-----BEGIN PRIVATE KEY-----\nplaceholder-bytes\n")
+	stream.Write("-----END PRIVATE ")
+	if output.String() != "visible [REDACTED:api_key]\n" {
+		t.Fatal("stream emitted the unfinished private key block")
+	}
+	stream.Write("KEY-----\n")
+	stream.Flush()
+	if output.String() != "visible [REDACTED:api_key]\n[REDACTED:private_key]\n" {
+		t.Fatal("stream did not redact the complete private key block")
+	}
+}
+
+func TestStreamSuppressesInterruptedPrivateKey(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want string
+	}{
+		{"", "[REDACTED:private_key]"},
+		{strings.Repeat("placeholder\n", streamHoldMax/10), "[REDACTED:oversized]"},
+	} {
+		var output strings.Builder
+		stream := NewStream(func(chunk string) { output.WriteString(chunk) })
+		stream.Write("visible\n-----BEGIN PRIVATE KEY-----\n" + tc.body)
+		stream.Write("trailing placeholder bytes\n")
+		stream.Flush()
+		if output.String() != "visible\n"+tc.want {
+			t.Fatal("stream exposed part of an interrupted private key block")
+		}
+	}
+}
 
 func TestStream_SplitSecretAndKey(t *testing.T) {
 	ClearSecrets()

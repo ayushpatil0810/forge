@@ -174,8 +174,8 @@ func TestMaskKey(t *testing.T) {
 		{"", "(not set)"},
 		{"123", "****"},
 		{"1234", "****"},
-		{"abcdef1234", "...1234"},
-		{"sk-proj-abcde9876", "sk-...9876"},
+		{"abcdef1234", "****"},
+		{"sk-proj-abcde9876", "****"},
 	}
 
 	for _, tc := range cases {

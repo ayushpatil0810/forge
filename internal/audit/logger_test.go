@@ -82,6 +82,14 @@ func TestAudit_RecordShapesAndSecrets(t *testing.T) {
 	}
 }
 
+func TestSummarizeActionRedactsEscapedToolInput(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", `fixture "audit" value`)
+	got := SummarizeAction("read_file", `{"path":"fixture \u0022audit\u0022 value"}`)
+	if got != `{"path":"[REDACTED:api_key]"}` {
+		t.Fatal("audit summary exposed an escaped credential")
+	}
+}
+
 func TestAudit_ChainVerificationAndTamperDetection(t *testing.T) {
 	tmpDir := t.TempDir()
 	logPath := filepath.Join(tmpDir, "audit.jsonl")

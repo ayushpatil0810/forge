@@ -2,6 +2,7 @@ package tui_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -13,7 +14,12 @@ import (
 
 	"github.com/ayushpatil0810/forge/internal/agent"
 	"github.com/ayushpatil0810/forge/internal/credentials"
+	"github.com/ayushpatil0810/forge/internal/llm"
+	_ "github.com/ayushpatil0810/forge/internal/llm/anthropic"
 	"github.com/ayushpatil0810/forge/internal/llm/mock"
+	"github.com/ayushpatil0810/forge/internal/permission"
+	"github.com/ayushpatil0810/forge/internal/session"
+	"github.com/ayushpatil0810/forge/internal/tools"
 	"github.com/ayushpatil0810/forge/internal/tui"
 	"github.com/zalando/go-keyring"
 )
@@ -516,6 +522,105 @@ func TestWizardSavesProviderWithoutEnvVar(t *testing.T) {
 	}
 	if strings.Contains(text, "sk-test-key") {
 		t.Fatal("API key was written to the config file")
+	}
+}
+
+func TestProviderSwitchValidatesBeforeChangingRoute(t *testing.T) {
+	llm.RegisterProvider("rejected-route-fixture", func(llm.ProviderConfig) (llm.Provider, error) {
+		return nil, errors.New("provider unavailable")
+	})
+	var target llm.ProviderConfig
+	llm.RegisterProvider("new-route-fixture", func(cfg llm.ProviderConfig) (llm.Provider, error) {
+		target = cfg
+		return mock.New(), nil
+	})
+	s := agent.NewLocal(agent.Config{Provider: mock.New()})
+	defer s.Close()
+	m := tui.New(s, tui.DarkTheme())
+	m.SetProviderInfo("mock", "original-model")
+	m.SetBaseURL("https://original.example.test/v1")
+	m.SetContextWindowOverride(2048)
+	ready, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = typeLine(t, ready.(tui.Model), "/provider rejected-route-fixture")
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "provider unavailable") || !strings.Contains(view, "mock/original-model") {
+		t.Fatalf("failed switch did not preserve the active route:\n%s", view)
+	}
+	m = typeLine(t, m, "/provider new-route-fixture")
+	if target.Provider != "new-route-fixture" || target.BaseURL != "" || s.ContextUsage().Window != 2048 {
+		t.Fatal("provider switch did not bind the new route and context window")
+	}
+}
+
+func TestResumeBindsConversationAndWritesToActiveStore(t *testing.T) {
+	root, foreign := t.TempDir(), t.TempDir()
+	store, err := session.NewStore(filepath.Join(t.TempDir(), "custom.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := t.Context()
+	const providerName = "resume-route-fixture"
+	provider := mock.New(mock.Turn{mock.Text("restored reply"), mock.Usage(10, 2)})
+	llm.RegisterProvider(providerName, func(llm.ProviderConfig) (llm.Provider, error) { return provider, nil })
+	for i, fixture := range []struct{ id, workspace, provider string }{
+		{"saved", root, providerName}, {"foreign", foreign, providerName}, {"other-provider", root, "openai"},
+	} {
+		now := time.Now().Add(-time.Duration(i) * time.Hour)
+		if err := store.CreateSession(ctx, session.SessionRecord{
+			ID: fixture.id, Workspace: session.CanonicalWorkspace(fixture.workspace), Provider: fixture.provider,
+			Model: "saved-model", Title: fixture.id, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.SaveMessage(ctx, session.MessageRecord{ID: "saved-message", SessionID: "saved", Role: "user", Content: "saved prompt"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveUsage(ctx, session.UsageRecord{SessionID: "saved", Model: "saved-model", InputTokens: 20, OutputTokens: 4}); err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.DefaultTools(root)
+	registry.Tracker().MarkRead("example.txt")
+	s := agent.NewLocal(agent.Config{ID: "previous", Provider: mock.New(), Tools: registry, Policy: permission.Policy{Mode: permission.ModePlan}})
+	defer s.Close()
+	m := tui.New(s, tui.DarkTheme())
+	m.SetProviderInfo(providerName, "original-model")
+	m.SetWorkspaceRoot(root)
+	m.SetSessionStore(store, false)
+	ready, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = typeLine(t, ready.(tui.Model), "/resume foreign")
+	m = typeLine(t, m, "/resume other-provider")
+	if s.ID() != "previous" || len(s.History()) != 0 {
+		t.Fatal("a rejected resume replaced the current conversation")
+	}
+	m = typeLine(t, m, "/resume")
+	chosen, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = chosen.(tui.Model)
+	if s.ID() != "saved" || s.Mode() != permission.ModePlan || registry.Tracker().HasBeenRead("example.txt") {
+		t.Fatal("resume did not change the session ID, keep plan mode, and clear read approvals")
+	}
+	m = typeLine(t, m, "continue")
+	timeout := time.After(10 * time.Second)
+	for done := false; !done; {
+		select {
+		case ev := <-s.Events():
+			updated, _ := m.Update(ev)
+			m = updated.(tui.Model)
+			done = ev.Terminal()
+		case <-timeout:
+			t.Fatal("resumed turn did not finish")
+		}
+	}
+	if len(provider.Requests) != 1 || provider.Requests[0].Messages[0].Text != "saved prompt" {
+		t.Fatal("the follow-up request did not use the saved history")
+	}
+	data, err := session.LoadResumedSession(ctx, store, "saved")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data.Messages) != 3 || data.Messages[1].Content != "continue" || data.TotalUsage.InputTokens != 30 || data.TotalUsage.OutputTokens != 6 {
+		t.Fatalf("follow-up message or usage missing from the resumed session: messages=%d input=%d output=%d", len(data.Messages), data.TotalUsage.InputTokens, data.TotalUsage.OutputTokens)
 	}
 }
 

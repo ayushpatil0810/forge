@@ -7,6 +7,28 @@ import (
 	"testing"
 )
 
+func TestProviderSelectionLeavesPreviousBaseURLBehind(t *testing.T) {
+	dir := t.TempDir()
+	user := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(user, []byte(`{"provider":"openai","base_url":"https://example.test/v1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FORGE_PROVIDER", "")
+	t.Setenv("FORGE_BASE_URL", "")
+	t.Setenv("OPENAI_BASE_URL", "")
+	opts := LoadOptions{WorkspaceRoot: dir, UserConfigFile: user, Provider: "anthropic"}
+	for _, fromEnvironment := range []bool{false, true} {
+		if fromEnvironment {
+			t.Setenv("FORGE_PROVIDER", opts.Provider)
+			opts.Provider = ""
+		}
+		cfg, err := Load(opts)
+		if err != nil || cfg.Provider != "anthropic" || cfg.BaseURL != "" {
+			t.Fatalf("provider=%q base URL=%q (from environment=%t), err=%v", cfg.Provider, cfg.BaseURL, fromEnvironment, err)
+		}
+	}
+}
+
 func TestOpenAIBaseURL_OnlyCompatibleProviders(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("FORGE_BASE_URL", "")

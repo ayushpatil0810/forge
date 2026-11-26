@@ -27,6 +27,7 @@ import (
 	_ "github.com/ayushpatil0810/forge/internal/llm/openai"
 	"github.com/ayushpatil0810/forge/internal/permission"
 	"github.com/ayushpatil0810/forge/internal/policy"
+	"github.com/ayushpatil0810/forge/internal/redact"
 	"github.com/ayushpatil0810/forge/internal/session"
 	"github.com/ayushpatil0810/forge/internal/tools"
 	"github.com/ayushpatil0810/forge/internal/tui"
@@ -71,7 +72,7 @@ type ExitCodeError struct {
 
 func (e ExitCodeError) Error() string {
 	if e.Err != nil {
-		return e.Err.Error()
+		return redact.Redact(e.Err.Error())
 	}
 	return fmt.Sprintf("exit code %d", e.Code)
 }
@@ -220,19 +221,19 @@ func newConfigCmd() *cobra.Command {
 				return ExitCodeError{Code: 2, Err: err}
 			}
 			for _, w := range cfg.Warnings {
-				cmd.PrintErrf("Warning: %s\n", w)
+				cmd.PrintErrf("Warning: %s\n", redact.Redact(w))
 			}
 			if len(cfg.IgnoredProjectKeys) > 0 {
 				cmd.PrintErrln("Ignored project config keys (security policy):")
 				for k, reason := range cfg.IgnoredProjectKeys {
-					cmd.PrintErrf("  - %s: %s\n", k, reason)
+					cmd.PrintErrf("  - %s: %s\n", redact.Redact(k), redact.Redact(reason))
 				}
 			}
 			data, err := json.MarshalIndent(cfg.Redacted(), "", "  ")
 			if err != nil {
 				return ExitCodeError{Code: 2, Err: err}
 			}
-			cmd.Println(string(data))
+			cmd.Println(redact.JSON(string(data)))
 			return nil
 		},
 	}
@@ -416,7 +417,7 @@ func newAuthLoginCmd() *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
 			defer cancel()
 			if testErr := mgr.TestConnection(ctx, provider, key, ""); testErr != nil {
-				cmd.PrintErrf("Warning: API key verification failed: %v\n", testErr)
+				cmd.PrintErrf("Warning: API key verification failed: %s\n", redact.Redact(testErr.Error()))
 			}
 
 			source, err := mgr.Store(provider, key, allowPlaintextFile)
@@ -640,6 +641,21 @@ func bashEnvAllow(cfg config.Config) []string {
 	return cfg.Bash.EnvAllow
 }
 
+func resolvePermissionMode(configured string) permission.Mode {
+	switch {
+	case strings.EqualFold(configured, string(permission.ModePlan)):
+		return permission.ModePlan
+	case yoloFlag:
+		return permission.ModeYOLO
+	case yesFlag:
+		return permission.ModeAcceptEdits
+	case configured != "":
+		return permission.Mode(configured)
+	default:
+		return permission.ModeDefault
+	}
+}
+
 func decideHeadlessApproval(isDangerous, isProtected, yes, yolo bool) (agent.Decision, string) {
 	if isDangerous {
 		return agent.DecisionDeny, "dangerous command cannot be auto-approved in headless mode"
@@ -711,6 +727,28 @@ type headlessJSONOutput struct {
 	Error     string               `json:"error,omitempty"`
 }
 
+func modelMetadata(cfg config.Config, provider, model string, overrideWindow int) (llm.ContextInfo, llm.PriceInfo) {
+	entry := cfg.Models[config.ModelKey(provider, model)]
+	return llm.ResolveContextInfo(provider, model, overrideWindow, entry.ContextWindow, 0),
+		llm.ResolvePriceInfo(provider, model, entry.PriceIn, entry.PriceOut)
+}
+
+func applyResumedModel(cfg *config.Config, saved session.SessionRecord) error {
+	if demoFlag {
+		return nil
+	}
+	if !strings.EqualFold(saved.Provider, cfg.Provider) {
+		if providerFlag == "" {
+			return fmt.Errorf("session %s uses provider %q. Select that provider and endpoint, or pass --provider to use a different one explicitly", saved.ID, saved.Provider)
+		}
+		return nil
+	}
+	if modelFlag == "" && saved.Model != "" {
+		cfg.Model = saved.Model
+	}
+	return nil
+}
+
 func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, maxTurns int) error {
 	outputFormat = strings.ToLower(strings.TrimSpace(outputFormat))
 	if outputFormat == "" {
@@ -748,27 +786,9 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 		return ExitCodeError{Code: 2, Err: fmt.Errorf("loading config: %w", err)}
 	}
 	for _, w := range cfg.Warnings {
-		fmt.Fprintf(os.Stderr, "Warning: %s\n", w)
+		fmt.Fprintf(os.Stderr, "Warning: %s\n", redact.Redact(w))
 	}
 
-	activeProvider := cfg.Provider
-	activeModel := cfg.Model
-	if demoFlag {
-		activeProvider = "mock"
-		activeModel = "demo"
-	}
-	var userPriceIn, userPriceOut float64
-	var userContextWindow int
-	key := config.ModelKey(activeProvider, activeModel)
-	if cfg.Models != nil {
-		if entry, ok := cfg.Models[key]; ok {
-			if entry.ContextWindow > 0 {
-				userContextWindow = entry.ContextWindow
-			}
-			userPriceIn = entry.PriceIn
-			userPriceOut = entry.PriceOut
-		}
-	}
 	var overrideContextWindow int
 	var tier1Thresh, tier2Thresh, emergThresh float64
 	var keepRecentTurns, summaryMaxTokens int
@@ -786,21 +806,11 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 			autoCompactEnabled = *cfg.Context.AutoCompact
 		}
 	}
-	ctxInfo := llm.ResolveContextInfo(activeProvider, activeModel, overrideContextWindow, userContextWindow, 0)
-	priceInfo := llm.ResolvePriceInfo(activeProvider, activeModel, userPriceIn, userPriceOut)
-
 	var maxCostBudget float64
 	var maxTokensBudget int
 	if cfg.Budget != nil {
 		maxCostBudget = cfg.Budget.MaxCost
 		maxTokensBudget = cfg.Budget.MaxTokens
-	}
-
-	if maxCostBudget > 0 && !priceInfo.Known {
-		return ExitCodeError{
-			Code: 2,
-			Err:  fmt.Errorf("model %q has unknown pricing; set prices for the model in configuration, or use --max-tokens to enforce a token budget", activeModel),
-		}
 	}
 
 	if demoFlag && rootFlag == "." {
@@ -824,8 +834,8 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 		}
 	}
 
+	var resumedData *session.ResumedSessionData
 	var sessionID string
-	var sessionHistory []llm.Message
 
 	if resumeFlag != "" {
 		if store == nil {
@@ -839,29 +849,32 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 			}
 			targetID = list[0].ID
 		}
-		resumedData, err := session.LoadResumedSession(ctx, store, targetID)
+		resumedData, err = session.LoadResumedSession(ctx, store, targetID)
 		if err != nil {
 			return ExitCodeError{Code: 1, Err: fmt.Errorf("resuming session %s: %w", targetID, err)}
 		}
-		explicitRoot := rootFlag != "" && rootFlag != "."
-		if err := session.ValidateWorkspaceBinding(resumedData.Session.Workspace, cfg.WorkspaceRoot, resumedData.Session.ID); err != nil && !explicitRoot {
+		if err := session.ValidateWorkspaceBinding(resumedData.Session.Workspace, cfg.WorkspaceRoot, resumedData.Session.ID); err != nil {
 			return ExitCodeError{Code: 1, Err: err}
 		}
-		sessionID = resumedData.Session.ID
-		sessionHistory = resumedData.LLMMessages
-	} else {
-		sessionID = session.GenerateSessionID()
-		if store != nil {
-			_ = store.CreateSession(ctx, session.SessionRecord{
-				ID:        sessionID,
-				Workspace: session.CanonicalWorkspace(cfg.WorkspaceRoot),
-				Provider:  cfg.Provider,
-				Model:     cfg.Model,
-				Title:     session.TruncateTitle(prompt),
-				CreatedAt: time.Now(),
-				UpdatedAt: time.Now(),
-			})
+		if err := applyResumedModel(&cfg, resumedData.Session); err != nil {
+			return ExitCodeError{Code: 2, Err: err}
 		}
+		sessionID = resumedData.Session.ID
+	}
+	activeProvider, activeModel := cfg.Provider, cfg.Model
+	if demoFlag {
+		activeProvider, activeModel = "mock", "demo"
+	}
+	ctxInfo, priceInfo := modelMetadata(cfg, activeProvider, activeModel, overrideContextWindow)
+	if maxCostBudget > 0 && !priceInfo.Known {
+		return ExitCodeError{
+			Code: 2,
+			Err:  fmt.Errorf("model %q has unknown pricing; set prices for the model in configuration, or use --max-tokens to enforce a token budget", activeModel),
+		}
+	}
+
+	if sessionID == "" {
+		sessionID = session.GenerateSessionID()
 	}
 
 	var provider llm.Provider
@@ -916,14 +929,9 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 		toolRegistry = tools.DefaultToolsWithEnvAllow(cfg.WorkspaceRoot, bashEnvAllow(cfg), sh)
 	}
 
-	resolvedMode := permission.ModeDefault
-	if yoloFlag {
-		resolvedMode = permission.ModeYOLO
-	} else if yesFlag {
-		resolvedMode = permission.ModeAcceptEdits
-	} else if cfg.PermissionMode != "" {
-		resolvedMode = permission.Mode(cfg.PermissionMode)
-	}
+	resolvedMode := resolvePermissionMode(cfg.PermissionMode)
+	canAutoApprove := resolvedMode != permission.ModePlan
+	yes, yolo := yesFlag && canAutoApprove, yoloFlag && canAutoApprove
 
 	chkMgr, _ := checkpoint.New(cfg.WorkspaceRoot)
 	var checkpointer agent.Checkpointer
@@ -934,13 +942,13 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 	ps, err := loadEffectivePolicy(cfg.WorkspaceRoot)
 	if err != nil {
 		if errors.Is(err, policy.ErrInvalidPolicy) {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error: %s\n", redact.Redact(err.Error()))
 			os.Exit(2)
 		}
 	}
 	if ps != nil && len(ps.Warnings) > 0 {
 		for _, w := range ps.Warnings {
-			fmt.Fprintf(os.Stderr, "%s\n", w)
+			fmt.Fprintf(os.Stderr, "%s\n", redact.Redact(w))
 		}
 	}
 
@@ -973,17 +981,16 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 		Root:     cfg.WorkspaceRoot,
 	})
 
-	if len(sessionHistory) > 0 && ctxInfo.Known && ctxInfo.Window > 0 {
-		approxTokens := agent.EstimateChars(sessionHistory, systemPrompt, toolRegistry.Specs()) / 4
+	if resumedData != nil && ctxInfo.Known && ctxInfo.Window > 0 {
+		approxTokens := agent.EstimateChars(resumedData.LLMMessages, systemPrompt, toolRegistry.Specs()) / 4
 		if approxTokens > ctxInfo.Window {
 			fmt.Fprintf(os.Stderr, "Error: session history (~%d tokens) exceeds context window of %s (%d tokens).\n", approxTokens, activeModel, ctxInfo.Window)
 			return ExitCodeError{Code: 1, Err: fmt.Errorf("session history exceeds model context window")}
 		}
 	}
 
-	s := agent.NewLocal(agent.Config{
+	sessionConfig := agent.Config{
 		ID:                 sessionID,
-		History:            sessionHistory,
 		Provider:           provider,
 		Tools:              toolRegistry,
 		Policy:             permission.Policy{Mode: resolvedMode},
@@ -993,7 +1000,7 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 		MaxTurns:           cfg.MaxTurns,
 		Checkpointer:       checkpointer,
 		IsHeadless:         true,
-		AutoApprove:        yesFlag || yoloFlag,
+		AutoApprove:        yes || yolo,
 		ContextWindow:      ctxInfo.Window,
 		AutoCompact:        autoCompactEnabled,
 		Tier1Threshold:     tier1Thresh,
@@ -1003,11 +1010,35 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 		SummaryMaxTokens:   summaryMaxTokens,
 		MaxCostBudget:      maxCostBudget,
 		MaxTokensBudget:    maxTokensBudget,
-		SessionStore:       store,
-	})
+	}
+	if store != nil {
+		sessionConfig.SessionStore = store
+	}
+	if resumedData != nil {
+		sessionConfig.History = resumedData.History
+		sessionConfig.Compactions = resumedData.Compactions
+		sessionConfig.InitialUsage = resumedData.TotalUsage
+	}
+	s := agent.NewLocal(sessionConfig)
 	defer s.Close()
 
+	prompt = redact.Redact(prompt)
 	if store != nil {
+		if resumedData == nil {
+			_ = store.CreateSession(ctx, session.SessionRecord{
+				ID:        sessionID,
+				Workspace: session.CanonicalWorkspace(cfg.WorkspaceRoot),
+				Provider:  activeProvider,
+				Model:     activeModel,
+				Title:     session.TruncateTitle(prompt),
+				CreatedAt: time.Now(),
+				UpdatedAt: time.Now(),
+			})
+		} else {
+			if err := store.UpdateSessionModel(ctx, sessionID, activeProvider, activeModel); err != nil {
+				return ExitCodeError{Code: 1, Err: fmt.Errorf("saving active session model: %w", err)}
+			}
+		}
 		userMsgID := fmt.Sprintf("msg_%d_u", time.Now().UnixNano())
 		_ = store.SaveMessage(ctx, session.MessageRecord{
 			ID:        userMsgID,
@@ -1028,7 +1059,7 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 		hadPermissionDenial bool
 		finalErr            *agent.ErrorPayload
 		finalDone           *agent.DonePayload
-		cumulativeUsage     agent.Usage
+		cumulativeUsage     = s.Usage()
 		turnCount           int
 	)
 
@@ -1071,7 +1102,7 @@ eventLoop:
 			}
 		case agent.EventApprovalRequested:
 			if ev.Approval != nil {
-				d, reason := decideHeadlessApproval(ev.Approval.IsDangerous, ev.Approval.IsProtected, yesFlag, yoloFlag)
+				d, reason := decideHeadlessApproval(ev.Approval.IsDangerous, ev.Approval.IsProtected, yes, yolo)
 				if d == agent.DecisionDeny {
 					hadPermissionDenial = true
 					if outputFormat == "text" {
@@ -1108,15 +1139,16 @@ eventLoop:
 			}
 		case agent.EventUsageUpdated:
 			if ev.Usage != nil {
+				previousUsage := cumulativeUsage
 				cumulativeUsage = *ev.Usage
 				turnCount++
 				if store != nil {
 					_ = store.SaveUsage(ctx, session.UsageRecord{
 						SessionID:    sessionID,
-						Model:        cfg.Model,
-						InputTokens:  ev.Usage.InputTokens,
-						OutputTokens: ev.Usage.OutputTokens,
-						Cost:         ev.Usage.Cost,
+						Model:        activeModel,
+						InputTokens:  ev.Usage.InputTokens - previousUsage.InputTokens,
+						OutputTokens: ev.Usage.OutputTokens - previousUsage.OutputTokens,
+						Cost:         ev.Usage.Cost - previousUsage.Cost,
 						CreatedAt:    time.Now(),
 					})
 				}
@@ -1212,27 +1244,9 @@ func runInteractive(ctx context.Context) error {
 		return ExitCodeError{Code: 2, Err: fmt.Errorf("loading config: %w", err)}
 	}
 	for _, w := range cfg.Warnings {
-		fmt.Fprintf(os.Stderr, "Warning: %s\n", w)
+		fmt.Fprintf(os.Stderr, "Warning: %s\n", redact.Redact(w))
 	}
 
-	activeProvider := cfg.Provider
-	activeModel := cfg.Model
-	if demoFlag {
-		activeProvider = "mock"
-		activeModel = "demo"
-	}
-	var userPriceIn, userPriceOut float64
-	var userContextWindow int
-	key := config.ModelKey(activeProvider, activeModel)
-	if cfg.Models != nil {
-		if entry, ok := cfg.Models[key]; ok {
-			if entry.ContextWindow > 0 {
-				userContextWindow = entry.ContextWindow
-			}
-			userPriceIn = entry.PriceIn
-			userPriceOut = entry.PriceOut
-		}
-	}
 	var overrideContextWindow int
 	var tier1Thresh, tier2Thresh, emergThresh float64
 	var keepRecentTurns, summaryMaxTokens int
@@ -1250,21 +1264,11 @@ func runInteractive(ctx context.Context) error {
 			autoCompactEnabled = *cfg.Context.AutoCompact
 		}
 	}
-	ctxInfo := llm.ResolveContextInfo(activeProvider, activeModel, overrideContextWindow, userContextWindow, 0)
-	priceInfo := llm.ResolvePriceInfo(activeProvider, activeModel, userPriceIn, userPriceOut)
-
 	var maxCostBudget float64
 	var maxTokensBudget int
 	if cfg.Budget != nil {
 		maxCostBudget = cfg.Budget.MaxCost
 		maxTokensBudget = cfg.Budget.MaxTokens
-	}
-
-	if maxCostBudget > 0 && !priceInfo.Known {
-		return ExitCodeError{
-			Code: 2,
-			Err:  fmt.Errorf("model %q has unknown pricing; set prices for the model in configuration, or use --max-tokens to enforce a token budget", activeModel),
-		}
 	}
 
 	if demoFlag && rootFlag == "." {
@@ -1290,7 +1294,6 @@ func runInteractive(ctx context.Context) error {
 
 	var resumedData *session.ResumedSessionData
 	var sessionID string
-	var sessionHistory []llm.Message
 
 	if resumeFlag != "" {
 		if store == nil {
@@ -1310,19 +1313,26 @@ func runInteractive(ctx context.Context) error {
 			if err != nil {
 				return ExitCodeError{Code: 1, Err: fmt.Errorf("loading session %s: %w", targetID, err)}
 			}
-			explicitRoot := rootFlag != "" && rootFlag != "."
-			if err := session.ValidateWorkspaceBinding(data.Session.Workspace, cfg.WorkspaceRoot, data.Session.ID); err != nil && !explicitRoot {
+			if err := session.ValidateWorkspaceBinding(data.Session.Workspace, cfg.WorkspaceRoot, data.Session.ID); err != nil {
 				return ExitCodeError{Code: 1, Err: err}
 			}
 			resumedData = data
 			sessionID = data.Session.ID
-			sessionHistory = data.LLMMessages
-			if providerFlag == "" {
-				cfg.Provider = data.Session.Provider
+			if err := applyResumedModel(&cfg, data.Session); err != nil {
+				return ExitCodeError{Code: 2, Err: err}
 			}
-			if modelFlag == "" {
-				cfg.Model = data.Session.Model
-			}
+		}
+	}
+
+	activeProvider, activeModel := cfg.Provider, cfg.Model
+	if demoFlag {
+		activeProvider, activeModel = "mock", "demo"
+	}
+	ctxInfo, priceInfo := modelMetadata(cfg, activeProvider, activeModel, overrideContextWindow)
+	if maxCostBudget > 0 && !priceInfo.Known {
+		return ExitCodeError{
+			Code: 2,
+			Err:  fmt.Errorf("model %q has unknown pricing; set prices for the model in configuration, or use --max-tokens to enforce a token budget", activeModel),
 		}
 	}
 
@@ -1332,8 +1342,8 @@ func runInteractive(ctx context.Context) error {
 			_ = store.CreateSession(ctx, session.SessionRecord{
 				ID:        sessionID,
 				Workspace: session.CanonicalWorkspace(cfg.WorkspaceRoot),
-				Provider:  cfg.Provider,
-				Model:     cfg.Model,
+				Provider:  activeProvider,
+				Model:     activeModel,
 				Title:     "Interactive session",
 				CreatedAt: time.Now(),
 				UpdatedAt: time.Now(),
@@ -1343,12 +1353,9 @@ func runInteractive(ctx context.Context) error {
 
 	var provider llm.Provider
 	var toolRegistry *tools.Registry
-	var providerName, modelName string
 	var needsWizard bool
 
 	if demoFlag {
-		providerName = "mock"
-		modelName = "demo"
 		provider = mock.New(
 			mock.Turn{
 				mock.Text("I will inspect the failing tests in this repository using `bash`.\n"),
@@ -1381,8 +1388,6 @@ func runInteractive(ctx context.Context) error {
 		)
 		toolRegistry = tools.DemoTools(cfg.WorkspaceRoot, demoSpeedFlag)
 	} else {
-		providerName = cfg.Provider
-		modelName = cfg.Model
 		credMgr := credentials.NewManager(nil)
 		cred := credMgr.Resolve(cfg.Provider)
 		missingKey := cred.Source == credentials.SourceNone || strings.TrimSpace(cred.Key) == ""
@@ -1392,22 +1397,14 @@ func runInteractive(ctx context.Context) error {
 		}
 		provider = p
 		needsWizard = wizard
-		if needsWizard {
-			providerName = "not configured"
-			modelName = "—"
+		if needsWizard && resumedData != nil {
+			return ExitCodeError{Code: 2, Err: fmt.Errorf("configure credentials for provider %q before resuming", cfg.Provider)}
 		}
 		sh := tools.DetectShell(cfg.Shell)
 		toolRegistry = tools.DefaultToolsWithEnvAllow(cfg.WorkspaceRoot, bashEnvAllow(cfg), sh)
 	}
 
-	permMode := permission.ModeDefault
-	if yoloFlag {
-		permMode = permission.ModeYOLO
-	} else if yesFlag {
-		permMode = permission.ModeAcceptEdits
-	} else if cfg.PermissionMode != "" {
-		permMode = permission.Mode(cfg.PermissionMode)
-	}
+	permMode := resolvePermissionMode(cfg.PermissionMode)
 
 	chkMgr, _ := checkpoint.New(cfg.WorkspaceRoot)
 	var checkpointer agent.Checkpointer
@@ -1418,13 +1415,13 @@ func runInteractive(ctx context.Context) error {
 	ps, err := loadEffectivePolicy(cfg.WorkspaceRoot)
 	if err != nil {
 		if errors.Is(err, policy.ErrInvalidPolicy) {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error: %s\n", redact.Redact(err.Error()))
 			os.Exit(2)
 		}
 	}
 	if ps != nil && len(ps.Warnings) > 0 {
 		for _, w := range ps.Warnings {
-			fmt.Fprintf(os.Stderr, "%s\n", w)
+			fmt.Fprintf(os.Stderr, "%s\n", redact.Redact(w))
 		}
 	}
 
@@ -1457,17 +1454,16 @@ func runInteractive(ctx context.Context) error {
 		Root:     cfg.WorkspaceRoot,
 	})
 
-	if len(sessionHistory) > 0 && ctxInfo.Known && ctxInfo.Window > 0 {
-		approxTokens := agent.EstimateChars(sessionHistory, systemPrompt, toolRegistry.Specs()) / 4
+	if resumedData != nil && ctxInfo.Known && ctxInfo.Window > 0 {
+		approxTokens := agent.EstimateChars(resumedData.LLMMessages, systemPrompt, toolRegistry.Specs()) / 4
 		if approxTokens > ctxInfo.Window {
 			fmt.Fprintf(os.Stderr, "Error: session history (~%d tokens) exceeds context window of %s (%d tokens).\n", approxTokens, activeModel, ctxInfo.Window)
 			return ExitCodeError{Code: 1, Err: fmt.Errorf("session history exceeds model context window")}
 		}
 	}
 
-	s := agent.NewLocal(agent.Config{
+	sessionConfig := agent.Config{
 		ID:                 sessionID,
-		History:            sessionHistory,
 		Provider:           provider,
 		Tools:              toolRegistry,
 		Policy:             permission.Policy{Mode: permMode},
@@ -1484,8 +1480,16 @@ func runInteractive(ctx context.Context) error {
 		SummaryMaxTokens:   summaryMaxTokens,
 		MaxCostBudget:      maxCostBudget,
 		MaxTokensBudget:    maxTokensBudget,
-		SessionStore:       store,
-	})
+	}
+	if store != nil {
+		sessionConfig.SessionStore = store
+	}
+	if resumedData != nil {
+		sessionConfig.History = resumedData.History
+		sessionConfig.Compactions = resumedData.Compactions
+		sessionConfig.InitialUsage = resumedData.TotalUsage
+	}
+	s := agent.NewLocal(sessionConfig)
 	defer s.Close()
 
 	th, err := tui.LoadTheme(cfg.Theme)
@@ -1495,9 +1499,10 @@ func runInteractive(ctx context.Context) error {
 	}
 	m := tui.New(s, th)
 	m.SetSecurityNotices(cfg.Warnings)
-	m.SetProviderInfo(providerName, modelName)
+	m.SetProviderInfo(activeProvider, activeModel)
 	m.SetBudget(maxCostBudget, maxTokensBudget)
 	m.SetBaseURL(cfg.BaseURL)
+	m.SetContextWindowOverride(overrideContextWindow)
 	m.SetWorkspaceRoot(cfg.WorkspaceRoot)
 	m.SetSessionStore(store, noSessionFlag)
 	m.SetVersion(version)
@@ -1546,7 +1551,7 @@ func main() {
 		var exitErr ExitCodeError
 		if errors.As(err, &exitErr) {
 			if exitErr.Err != nil && exitErr.Code != 0 {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", exitErr.Err)
+				fmt.Fprintf(os.Stderr, "Error: %s\n", exitErr.Error())
 			}
 			os.Exit(exitErr.Code)
 		}

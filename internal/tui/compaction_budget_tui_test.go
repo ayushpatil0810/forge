@@ -122,6 +122,7 @@ func TestTUI_Commands_CostAndBudget(t *testing.T) {
 }
 
 func TestTUI_ModelSwitch_ApproachingWindowWarning(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "fixture-key")
 	p := mock.New()
 	s := agent.NewLocal(agent.Config{
 		Provider:      p,
@@ -130,7 +131,7 @@ func TestTUI_ModelSwitch_ApproachingWindowWarning(t *testing.T) {
 	defer s.Close()
 
 	m := New(s, DarkTheme())
-	m.SetProviderInfo("anthropic", "claude-sonnet-5-5")
+	m.SetProviderInfo("openai", "original-model")
 
 	newM, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = newM.(Model)

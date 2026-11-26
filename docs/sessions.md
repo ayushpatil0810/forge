@@ -72,13 +72,13 @@ Forge's credential redactor runs on all text before it is written to the databas
 
 - **Resume specific session**:
   ```bash
-  forge --resume s_1730000000_abcdef
+  forge --resume=s_1730000000_abcdef
   ```
 - **Resume most recent session in workspace**:
   ```bash
   forge --resume
   # or
-  forge --resume last
+  forge --resume=last
   ```
 - **Headless resumption**:
   ```bash
@@ -93,15 +93,15 @@ Forge's credential redactor runs on all text before it is written to the databas
 
 Inside an active interactive session:
 - `/resume`: Opens the interactive fuzzy session picker.
-- `/resume <session_id>`: Immediately switches to and restores the specified session.
+- `/resume <session_id>`: Restores the specified session in the current workspace and uses the active provider's endpoint. Select the session's provider before resuming.
 - `/sessions`: Alias for `/resume`.
 
 ### Restoration Semantics
 
 1. **Viewport Reconstruction**: Previous user prompts, assistant answers, and collapsed tool cards are restored with full markdown rendering.
 2. **Cumulative Metrics**: Input tokens, output tokens, and dollar costs are restored accurately.
-3. **Workspace Binding**: By default, Forge refuses to resume a session belonging to a different canonical directory root. To override this, pass `--root <path>`.
-4. **Permission Mode Reset**: Forge *never* restores `yolo` mode from a saved session. Resumed sessions always start in `ask` mode unless `--yolo` is explicitly passed on the current command line.
+3. **Workspace and Provider Binding**. Resume requires the saved canonical workspace. Pass `--root <path>` to select that workspace at startup. Forge uses the active provider configuration and endpoint. At startup you can pass `--provider` to explicitly continue with a different provider, and `--model` to select a different model. Saved sessions carry the provider and model. If a session used a custom endpoint, select that endpoint before resuming.
+4. **Permission Mode**. In-app resume keeps `plan` or resets the engine to `ask`. Startup resume takes its permission mode from the current configuration and flags.
 5. **Read-Before-Write Reset**: The tool tracker's read set is emptied upon resumption, and a system notice is injected into the model context:
    ```
    [Resumed session <id>. Files may have changed on disk since last session; always re-read files before editing.]

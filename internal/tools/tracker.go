@@ -52,3 +52,12 @@ func (t *ReadTracker) UnmarkRead(p string) {
 	delete(t.reads, clean)
 	delete(t.reads, filepath.ToSlash(clean))
 }
+
+func (t *ReadTracker) Reset() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	clear(t.reads)
+}
