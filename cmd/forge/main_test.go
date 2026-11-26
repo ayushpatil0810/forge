@@ -94,6 +94,33 @@ func TestRootCmdDemoFlagExecutes(t *testing.T) {
 	}
 }
 
+func TestRunPlanModeTakesPrecedenceOverAutoApproval(t *testing.T) {
+	for _, flag := range []string{"--yes", "--yolo"} {
+		t.Run(flag, func(t *testing.T) {
+			t.Cleanup(resetCLIFlags)
+			root := t.TempDir()
+			path := filepath.Join(root, "discount.go")
+			const original = "package demo\n\nfunc discount(amount int) bool {\n\tif amount > 100 {\n\t\treturn true\n\t}\n\treturn false\n}\n"
+			if err := os.WriteFile(path, []byte(original), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := newRootCmd()
+			cmd.SetArgs([]string{"run", "--root", root, "--demo", "--demo-speed", "0", "--no-session", "--permission-mode", "plan", flag, "review this file"})
+			var exit ExitCodeError
+			if err := cmd.Execute(); !errors.As(err, &exit) || exit.Code != 4 {
+				t.Fatalf("expected permission denial (exit 4), got %v", err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != original {
+				t.Fatal("plan mode modified the demo fixture")
+			}
+		})
+	}
+}
+
 func TestConfigSubcommand(t *testing.T) {
 	cmd := newRootCmd()
 	var out bytes.Buffer

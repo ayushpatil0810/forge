@@ -129,6 +129,8 @@ Schema:
 
 In non-interactive headless mode, stdin is not available to prompt a human. Forge handles approvals deterministically:
 
+Plan mode takes precedence over `--yes` and `--yolo`. Agent tools can read, list, and search files in plan mode. File edits and shell commands are denied.
+
 1. **Without `--yes` or `--yolo`**:
    Any action requiring human approval is automatically denied with a clear reason.
 2. **With `--yes`**:

@@ -640,6 +640,21 @@ func bashEnvAllow(cfg config.Config) []string {
 	return cfg.Bash.EnvAllow
 }
 
+func resolvePermissionMode(configured string) permission.Mode {
+	switch {
+	case strings.EqualFold(configured, string(permission.ModePlan)):
+		return permission.ModePlan
+	case yoloFlag:
+		return permission.ModeYOLO
+	case yesFlag:
+		return permission.ModeAcceptEdits
+	case configured != "":
+		return permission.Mode(configured)
+	default:
+		return permission.ModeDefault
+	}
+}
+
 func decideHeadlessApproval(isDangerous, isProtected, yes, yolo bool) (agent.Decision, string) {
 	if isDangerous {
 		return agent.DecisionDeny, "dangerous command cannot be auto-approved in headless mode"
@@ -916,14 +931,9 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 		toolRegistry = tools.DefaultToolsWithEnvAllow(cfg.WorkspaceRoot, bashEnvAllow(cfg), sh)
 	}
 
-	resolvedMode := permission.ModeDefault
-	if yoloFlag {
-		resolvedMode = permission.ModeYOLO
-	} else if yesFlag {
-		resolvedMode = permission.ModeAcceptEdits
-	} else if cfg.PermissionMode != "" {
-		resolvedMode = permission.Mode(cfg.PermissionMode)
-	}
+	resolvedMode := resolvePermissionMode(cfg.PermissionMode)
+	canAutoApprove := resolvedMode != permission.ModePlan
+	yes, yolo := yesFlag && canAutoApprove, yoloFlag && canAutoApprove
 
 	chkMgr, _ := checkpoint.New(cfg.WorkspaceRoot)
 	var checkpointer agent.Checkpointer
@@ -993,7 +1003,7 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 		MaxTurns:           cfg.MaxTurns,
 		Checkpointer:       checkpointer,
 		IsHeadless:         true,
-		AutoApprove:        yesFlag || yoloFlag,
+		AutoApprove:        yes || yolo,
 		ContextWindow:      ctxInfo.Window,
 		AutoCompact:        autoCompactEnabled,
 		Tier1Threshold:     tier1Thresh,
@@ -1071,7 +1081,7 @@ eventLoop:
 			}
 		case agent.EventApprovalRequested:
 			if ev.Approval != nil {
-				d, reason := decideHeadlessApproval(ev.Approval.IsDangerous, ev.Approval.IsProtected, yesFlag, yoloFlag)
+				d, reason := decideHeadlessApproval(ev.Approval.IsDangerous, ev.Approval.IsProtected, yes, yolo)
 				if d == agent.DecisionDeny {
 					hadPermissionDenial = true
 					if outputFormat == "text" {
@@ -1400,14 +1410,7 @@ func runInteractive(ctx context.Context) error {
 		toolRegistry = tools.DefaultToolsWithEnvAllow(cfg.WorkspaceRoot, bashEnvAllow(cfg), sh)
 	}
 
-	permMode := permission.ModeDefault
-	if yoloFlag {
-		permMode = permission.ModeYOLO
-	} else if yesFlag {
-		permMode = permission.ModeAcceptEdits
-	} else if cfg.PermissionMode != "" {
-		permMode = permission.Mode(cfg.PermissionMode)
-	}
+	permMode := resolvePermissionMode(cfg.PermissionMode)
 
 	chkMgr, _ := checkpoint.New(cfg.WorkspaceRoot)
 	var checkpointer agent.Checkpointer

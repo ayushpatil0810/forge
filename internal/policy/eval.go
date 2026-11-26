@@ -60,7 +60,29 @@ func Evaluate(req EvalRequest, set *PolicySet) EvalResult {
 		}
 	}
 
-	// 1. HARD SAFETY FLOOR
+	// Explicit denies take precedence over safety-floor prompts.
+	if set != nil {
+		allDenies := append([]Rule{}, set.UserRules...)
+		allDenies = append(allDenies, set.ProjectRules...)
+		for _, r := range allDenies {
+			if r.Action != ActionDeny || r.Tool != canonicalTool {
+				continue
+			}
+			if matchesRule(r, canonicalTool, req.Path, req.Command, bashAnalysis) {
+				return EvalResult{
+					Verdict:      permission.Deny,
+					Source:       "rule:" + r.Raw,
+					Reason:       fmt.Sprintf("matches %s deny rule: %s", r.Scope, r.Raw),
+					MatchedRule:  &r,
+					BashAnalysis: bashAnalysis,
+				}
+			}
+		}
+	}
+
+	readOnly := canonicalTool == ToolRead || canonicalTool == "list_dir" || canonicalTool == "glob" || canonicalTool == "grep"
+
+	// HARD SAFETY FLOOR
 	// Floor triggers if:
 	// - req.IsDangerous or matched dangerous command pattern
 	// - req.IsProtected or matched protected path pattern
@@ -97,7 +119,7 @@ func Evaluate(req EvalRequest, set *PolicySet) EvalResult {
 	if isFloor {
 		// Floor is never auto-allowed by any rule.
 		// Plan mode denies all writes/commands.
-		if req.Mode == permission.ModePlan && canonicalTool != ToolRead {
+		if req.Mode == permission.ModePlan && !readOnly {
 			return EvalResult{
 				Verdict:      permission.Deny,
 				Source:       "floor",
@@ -128,28 +150,11 @@ func Evaluate(req EvalRequest, set *PolicySet) EvalResult {
 		}
 	}
 
-	// 2. DENY RULES (Project and User rules; Deny always takes precedence and applies even in yolo)
-	if set != nil {
-		allDenies := append([]Rule{}, set.UserRules...)
-		allDenies = append(allDenies, set.ProjectRules...)
-		for _, r := range allDenies {
-			if r.Action != ActionDeny || r.Tool != canonicalTool {
-				continue
-			}
-			if matchesRule(r, canonicalTool, req.Path, req.Command, bashAnalysis) {
-				return EvalResult{
-					Verdict:      permission.Deny,
-					Source:       "rule:" + r.Raw,
-					Reason:       fmt.Sprintf("matches %s deny rule: %s", r.Scope, r.Raw),
-					MatchedRule:  &r,
-					IsFloor:      false,
-					BashAnalysis: bashAnalysis,
-				}
-			}
-		}
+	if req.Mode == permission.ModePlan && !readOnly {
+		return EvalResult{Verdict: permission.Deny, Source: "mode", Reason: "plan mode denies writes and command execution", BashAnalysis: bashAnalysis}
 	}
 
-	// 3. ASK RULES (Project and User rules)
+	// ASK RULES (Project and User rules)
 	if set != nil {
 		allAsks := append([]Rule{}, set.UserRules...)
 		allAsks = append(allAsks, set.ProjectRules...)
@@ -190,24 +195,13 @@ func Evaluate(req EvalRequest, set *PolicySet) EvalResult {
 		}
 	}
 
-	// 4. ALLOW RULES (User rules only; project allow rules are ignored)
+	// ALLOW RULES (User rules only; project allow rules are ignored)
 	if set != nil {
 		for _, r := range set.UserRules {
 			if r.Action != ActionAllow || r.Tool != canonicalTool {
 				continue
 			}
 			if matchesRule(r, canonicalTool, req.Path, req.Command, bashAnalysis) {
-				// Plan mode denies writes/exec regardless of allow rules
-				if req.Mode == permission.ModePlan && canonicalTool != ToolRead {
-					return EvalResult{
-						Verdict:      permission.Deny,
-						Source:       "mode",
-						Reason:       "plan mode denies mutating actions regardless of allow rules",
-						MatchedRule:  &r,
-						IsFloor:      false,
-						BashAnalysis: bashAnalysis,
-					}
-				}
 				return EvalResult{
 					Verdict:      permission.Allow,
 					Source:       "rule:" + r.Raw,
@@ -220,13 +214,10 @@ func Evaluate(req EvalRequest, set *PolicySet) EvalResult {
 		}
 	}
 
-	// 5. MODE DEFAULT
+	// MODE DEFAULT
 	switch req.Mode {
 	case permission.ModePlan:
-		if canonicalTool == ToolRead {
-			return EvalResult{Verdict: permission.Allow, Source: "mode", Reason: "plan mode allows read operations", BashAnalysis: bashAnalysis}
-		}
-		return EvalResult{Verdict: permission.Deny, Source: "mode", Reason: "plan mode denies writes and command execution", BashAnalysis: bashAnalysis}
+		return EvalResult{Verdict: permission.Allow, Source: "mode", Reason: "plan mode allows read operations", BashAnalysis: bashAnalysis}
 
 	case permission.ModeYOLO:
 		return EvalResult{Verdict: permission.Allow, Source: "mode", Reason: "yolo mode auto-approves non-floor actions", BashAnalysis: bashAnalysis}
