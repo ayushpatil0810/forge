@@ -152,7 +152,7 @@ Write-Host "Exit code: $LASTEXITCODE" # Must be 2
 
 ### Expected Result
 - Key securely stored in OS credential store (Windows Credential Manager / macOS Keychain / freedesktop Secret Service).
-- `forge auth status` displays provider as configured and masked key ID.
+- `forge auth status` displays the provider and credential source. The key marker contains no key characters.
 - Inference completes successfully without leaking keys in terminal or logs.
 
 ### If It Fails

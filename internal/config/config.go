@@ -148,12 +148,12 @@ func CheckInsecureBaseURL(baseURL string) string {
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Hostname() == "" {
-		return fmt.Sprintf("SEC-6: Custom base_url %q is not a valid URL.", baseURL)
+		return "SEC-6: Custom base_url is not a valid URL."
 	}
 	if isLoopbackHost(u.Hostname()) {
 		return ""
 	}
-	return fmt.Sprintf("SEC-6: Custom base_url %q transmits API keys in cleartext over insecure HTTP. Use HTTPS or a loopback address.", baseURL)
+	return fmt.Sprintf("SEC-6: Custom base_url host %q transmits API keys in cleartext over insecure HTTP. Use HTTPS or a loopback address.", u.Hostname())
 }
 
 func isLoopbackHost(host string) bool {

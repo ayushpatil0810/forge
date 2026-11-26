@@ -22,6 +22,7 @@ import (
 	"github.com/ayushpatil0810/forge/internal/credentials"
 	"github.com/ayushpatil0810/forge/internal/llm"
 	"github.com/ayushpatil0810/forge/internal/permission"
+	"github.com/ayushpatil0810/forge/internal/redact"
 	"github.com/ayushpatil0810/forge/internal/session"
 	"github.com/ayushpatil0810/forge/internal/tools"
 )
@@ -99,7 +100,7 @@ type errorMessage struct {
 }
 
 func (e errorMessage) render(_ int, _ bool, styles Styles) string {
-	return styles.ErrorText.Render(e.text)
+	return styles.ErrorText.Render(agent.RedactSecrets(e.text))
 }
 
 type systemMessage struct {
@@ -107,7 +108,7 @@ type systemMessage struct {
 }
 
 func (s systemMessage) render(_ int, _ bool, styles Styles) string {
-	return styles.SystemInfo.Render(s.text)
+	return styles.SystemInfo.Render(agent.RedactSecrets(s.text))
 }
 
 type errorCard struct {
@@ -388,20 +389,20 @@ func (m *Model) RestoreSession(data *session.ResumedSessionData) {
 	for _, msg := range data.Messages {
 		switch msg.Role {
 		case "user":
-			m.items = append(m.items, userMessage{text: msg.Content})
+			m.items = append(m.items, userMessage{text: agent.RedactSecrets(msg.Content)})
 		case "assistant":
 			if msg.Content != "" {
-				rendered, _ := m.renderer.Render(msg.Content)
+				rendered, _ := m.renderer.Render(agent.RedactSecrets(msg.Content))
 				m.items = append(m.items, assistantMessage{rendered: rendered})
 			}
 			if tcs, ok := data.ToolCallsByMsg[msg.ID]; ok {
 				for _, tc := range tcs {
-					card := NewToolCard(tc.ID, tc.Name, tc.Input)
+					card := NewToolCard(tc.ID, agent.RedactSecrets(tc.Name), redact.JSON(tc.Input))
 					card.Status = agent.ToolOK
 					if tc.Status == "error" || tc.Status == "interrupted" {
 						card.Status = agent.ToolError
 					}
-					card.Output = tc.Output
+					card.Output = agent.RedactSecrets(tc.Output)
 					m.items = append(m.items, toolMessage{card: card})
 					m.toolCards[tc.ID] = card
 				}
@@ -698,9 +699,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if input == "" || m.isStreaming || m.turnPending {
 				return m, nil
 			}
+			shownInput := agent.RedactSecrets(input)
 
 			if input == "/policy" || strings.HasPrefix(input, "/policy") {
-				m.items = append(m.items, userMessage{text: input})
+				m.items = append(m.items, userMessage{text: shownInput})
 				m.textarea.Reset()
 				ps := m.session.PolicySet()
 				if ps == nil {
@@ -754,14 +756,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.session.SetMode(targetMode)
 					}
 				}
-				m.items = append(m.items, userMessage{text: input})
+				m.items = append(m.items, userMessage{text: shownInput})
 				m.textarea.Reset()
 				m.updateViewportContent()
 				return m, nil
 			}
 
 			if input == "/checkpoints" {
-				m.items = append(m.items, userMessage{text: input})
+				m.items = append(m.items, userMessage{text: shownInput})
 				m.textarea.Reset()
 				chk := m.session.Checkpointer()
 				if chk == nil {
@@ -787,7 +789,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if input == "/undo" {
-				m.items = append(m.items, userMessage{text: input})
+				m.items = append(m.items, userMessage{text: shownInput})
 				m.textarea.Reset()
 				chk := m.session.Checkpointer()
 				if chk == nil {
@@ -815,7 +817,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if strings.HasPrefix(input, "/restore") {
-				m.items = append(m.items, userMessage{text: input})
+				m.items = append(m.items, userMessage{text: shownInput})
 				m.textarea.Reset()
 				parts := strings.Fields(input)
 				if len(parts) < 2 {
@@ -840,14 +842,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if input == "/models" {
-				m.items = append(m.items, userMessage{text: input})
+				m.items = append(m.items, userMessage{text: shownInput})
 				m.textarea.Reset()
 				m.wizard = NewModelSwitcher()
 				return m, nil
 			}
 
 			if input == "/model" || strings.HasPrefix(input, "/model ") {
-				m.items = append(m.items, userMessage{text: input})
+				m.items = append(m.items, userMessage{text: shownInput})
 				m.textarea.Reset()
 				parts := strings.Fields(input)
 				if len(parts) == 1 {
@@ -917,7 +919,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if input == "/compact" || strings.HasPrefix(input, "/compact ") {
-				m.items = append(m.items, userMessage{text: input})
+				m.items = append(m.items, userMessage{text: shownInput})
 				m.textarea.Reset()
 				focus := strings.TrimSpace(strings.TrimPrefix(input, "/compact"))
 				m.manualCompaction = true
@@ -931,7 +933,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if input == "/cost" {
-				m.items = append(m.items, userMessage{text: input})
+				m.items = append(m.items, userMessage{text: shownInput})
 				m.textarea.Reset()
 				u := m.session.Usage()
 				var sb strings.Builder
@@ -965,7 +967,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if input == "/budget" || strings.HasPrefix(input, "/budget ") {
-				m.items = append(m.items, userMessage{text: input})
+				m.items = append(m.items, userMessage{text: shownInput})
 				m.textarea.Reset()
 				parts := strings.Fields(input)
 				if len(parts) == 1 {
@@ -995,7 +997,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if input == "/resume" || input == "/sessions" || strings.HasPrefix(input, "/resume ") {
-				m.items = append(m.items, userMessage{text: input})
+				m.items = append(m.items, userMessage{text: shownInput})
 				m.textarea.Reset()
 				parts := strings.Fields(input)
 				if m.store == nil || m.noSession {
@@ -1017,7 +1019,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if strings.HasPrefix(input, "/provider") {
-				m.items = append(m.items, userMessage{text: input})
+				m.items = append(m.items, userMessage{text: shownInput})
 				m.textarea.Reset()
 				parts := strings.Fields(input)
 				if len(parts) == 1 {
@@ -1046,14 +1048,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if input == "/settings" {
-				m.items = append(m.items, userMessage{text: input})
+				m.items = append(m.items, userMessage{text: shownInput})
 				m.textarea.Reset()
 				m.wizard = NewWizardState()
 				return m, nil
 			}
 
 			if strings.HasPrefix(input, "/auth") {
-				m.items = append(m.items, userMessage{text: input})
+				m.items = append(m.items, userMessage{text: shownInput})
 				m.textarea.Reset()
 				mgr := credentials.NewManager(nil)
 				providers := []string{"anthropic", "openai", "gemini", "ollama", "lmstudio"}
@@ -1084,7 +1086,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			m.items = append(m.items, userMessage{text: input})
+			m.items = append(m.items, userMessage{text: shownInput})
 			m.textarea.Reset()
 			m.isStreaming = true
 			if m.providerName == "ollama" || m.providerName == "lmstudio" {
@@ -1406,8 +1408,8 @@ func renderWelcomeBanner(width int, version, provider, model, mode, branch strin
 	}
 
 	var details []string
-	details = append(details, fmt.Sprintf("%sProvider: %s", bullet, styles.AssistantText.Bold(true).Render(provider)))
-	details = append(details, fmt.Sprintf("%sModel:    %s", bullet, styles.AssistantText.Bold(true).Render(model)))
+	details = append(details, fmt.Sprintf("%sProvider: %s", bullet, styles.AssistantText.Bold(true).Render(agent.RedactSecrets(provider))))
+	details = append(details, fmt.Sprintf("%sModel:    %s", bullet, styles.AssistantText.Bold(true).Render(agent.RedactSecrets(model))))
 	details = append(details, fmt.Sprintf("%sMode:     %s", bullet, styles.AssistantText.Bold(true).Render(mode)))
 	if branch != "" {
 		details = append(details, fmt.Sprintf("%sBranch:   %s", bullet, styles.AssistantText.Bold(true).Render("git:"+branch)))
@@ -1444,7 +1446,7 @@ func renderSecurityNotices(notices []string, styles Styles) string {
 	b.WriteString("Security notice: project configuration ignored the following (SEC-6):\n")
 	for _, n := range notices {
 		b.WriteString("! ")
-		b.WriteString(n)
+		b.WriteString(agent.RedactSecrets(n))
 		b.WriteString("\n")
 	}
 	return styles.ToolCardError.Render(strings.TrimRight(b.String(), "\n"))
@@ -1526,9 +1528,9 @@ func (m Model) View() string {
 	providerInfo := ""
 	if m.providerName != "" {
 		if m.modelName != "" {
-			providerInfo = fmt.Sprintf("[%s/%s] ", m.providerName, m.modelName)
+			providerInfo = fmt.Sprintf("[%s/%s] ", agent.RedactSecrets(m.providerName), agent.RedactSecrets(m.modelName))
 		} else {
-			providerInfo = fmt.Sprintf("[%s] ", m.providerName)
+			providerInfo = fmt.Sprintf("[%s] ", agent.RedactSecrets(m.providerName))
 		}
 	}
 

@@ -278,16 +278,15 @@ func TestSlice8_RealAuthTeatestExitCheck(t *testing.T) {
 			t.Fatalf("API key leaked in config JSON: %s", string(cfgJSON))
 		}
 
-		// 2. 'forge auth status' output (only at most last 4 characters allowed)
+		// 2. Credential display marker
 		mgr := credentials.NewManager(mockKR)
 		resolved := mgr.Resolve("openai")
 		masked := credentials.MaskKey(resolved.Key)
 		if strings.Contains(masked, fakeSecretKey) {
 			t.Fatalf("API key leaked in MaskKey: %s", masked)
 		}
-		expectedTail := fakeSecretKey[len(fakeSecretKey)-4:]
-		if !strings.HasSuffix(masked, expectedTail) {
-			t.Fatalf("expected masked key to end in %q, got %q", expectedTail, masked)
+		if masked != "****" {
+			t.Fatal("credential marker must contain no key characters")
 		}
 
 		// 3. Confirm no key was written to any file in tempHome

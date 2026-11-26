@@ -3,11 +3,13 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ayushpatil0810/forge/internal/agent"
+	"github.com/ayushpatil0810/forge/internal/llm"
 	"github.com/ayushpatil0810/forge/internal/llm/mock"
 	"github.com/ayushpatil0810/forge/internal/redact"
 	"github.com/ayushpatil0810/forge/internal/tools"
@@ -40,6 +42,94 @@ const (
 	streamProbeSecret = "super-secret-value"
 	streamProbeKey    = "sk-abcdefghijklmnopqrstuvwxyz123456"
 )
+
+type credentialFixtureTool struct {
+	value string
+}
+
+func (credentialFixtureTool) Name() string        { return "credential_fixture" }
+func (credentialFixtureTool) Description() string { return "checks local test input" }
+func (credentialFixtureTool) Schema() json.RawMessage {
+	return json.RawMessage("{\"type\":\"object\"}")
+}
+func (t credentialFixtureTool) NeedsApproval(json.RawMessage) tools.ApprovalRequest {
+	return tools.ApprovalRequest{Description: "Review test input", Diff: "+" + t.value}
+}
+func (t credentialFixtureTool) Run(_ context.Context, input json.RawMessage) (tools.Result, error) {
+	var args struct{ Text string }
+	if err := json.Unmarshal(input, &args); err != nil || args.Text != t.value {
+		return tools.Result{}, errors.New("wrong test input")
+	}
+	return tools.Result{}, errors.New("fixture diagnostic: " + args.Text)
+}
+
+func TestCredentialRedactionAcrossEventsAndHistory(t *testing.T) {
+	redact.ClearSecrets()
+	t.Cleanup(redact.ClearSecrets)
+	const key = "fixture \"credential\" value"
+	agent.RegisterSecret(key)
+	split := len("fixture ")
+	p := mock.New(
+		mock.Turn{
+			mock.Text("response " + key[:split]), mock.Text(key[split:] + " shown"),
+			{Type: llm.StreamThinking, Text: "thought " + key[:split]},
+			{Type: llm.StreamThinking, Text: key[split:]},
+			mock.ToolUse(key, "credential_fixture", map[string]any{"text": key}),
+		},
+		mock.Turn{mock.Text("done")},
+	)
+	s := agent.NewLocal(agent.Config{Provider: p, Tools: tools.NewRegistry(credentialFixtureTool{value: key}), System: key})
+	defer s.Close()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if err := s.Send(ctx, "user prompt "+key); err != nil {
+		t.Fatal(err)
+	}
+	var text, thoughts strings.Builder
+	var callID string
+	var approved, result bool
+	for done := false; !done; {
+		select {
+		case ev := <-s.Events():
+			switch ev.Type {
+			case agent.EventTokenDelta:
+				text.WriteString(ev.Token.Text)
+			case agent.EventThinkingDelta:
+				thoughts.WriteString(ev.Thinking.Thinking)
+			case agent.EventToolStarted:
+				callID = ev.ToolStart.ID
+				if callID == "" || callID == key || !json.Valid([]byte(ev.ToolStart.Input)) || !strings.Contains(ev.ToolStart.Input, "[REDACTED:secret]") {
+					t.Fatal("tool event did not sanitize the ID and JSON input")
+				}
+			case agent.EventApprovalRequested:
+				approved = ev.Approval.IsProtected && ev.Approval.Diff == "+[REDACTED:secret]"
+				if err := s.Respond(ev.Approval.ID, agent.DecisionAllow); err != nil {
+					t.Fatal(err)
+				}
+			case agent.EventToolFinished:
+				result = ev.ToolDone.ID == callID && ev.ToolDone.Error == "fixture diagnostic: [REDACTED:secret]"
+			}
+			done = ev.Terminal()
+		case <-ctx.Done():
+			t.Fatal("session did not finish")
+		}
+	}
+	if text.String() != "response [REDACTED:secret] showndone" || thoughts.String() != "thought [REDACTED:secret]" || !approved || !result {
+		t.Fatal("stream, approval, or tool diagnostic was not redacted as expected")
+	}
+	if len(p.Requests) != 2 || p.Requests[0].System != "[REDACTED:secret]" {
+		t.Fatal("provider request did not use a redacted system prompt")
+	}
+	for _, messages := range [][]llm.Message{s.History(), p.Requests[1].Messages} {
+		if len(messages) < 3 || messages[0].Text != "user prompt [REDACTED:secret]" ||
+			messages[1].Text != "response [REDACTED:secret] shown" ||
+			!strings.Contains(string(messages[1].ToolCalls[0].Input), "[REDACTED:secret]") ||
+			messages[2].ToolCallID != callID || messages[2].Text != "fixture diagnostic: [REDACTED:secret]" {
+			t.Fatal("sanitized conversation did not preserve the tool pairing and expected messages")
+		}
+	}
+}
 
 func TestToolOutputDelta_RedactsSplitSecrets(t *testing.T) {
 	redact.ClearSecrets()

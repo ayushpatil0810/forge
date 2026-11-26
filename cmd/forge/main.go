@@ -27,6 +27,7 @@ import (
 	_ "github.com/ayushpatil0810/forge/internal/llm/openai"
 	"github.com/ayushpatil0810/forge/internal/permission"
 	"github.com/ayushpatil0810/forge/internal/policy"
+	"github.com/ayushpatil0810/forge/internal/redact"
 	"github.com/ayushpatil0810/forge/internal/session"
 	"github.com/ayushpatil0810/forge/internal/tools"
 	"github.com/ayushpatil0810/forge/internal/tui"
@@ -71,7 +72,7 @@ type ExitCodeError struct {
 
 func (e ExitCodeError) Error() string {
 	if e.Err != nil {
-		return e.Err.Error()
+		return redact.Redact(e.Err.Error())
 	}
 	return fmt.Sprintf("exit code %d", e.Code)
 }
@@ -220,19 +221,19 @@ func newConfigCmd() *cobra.Command {
 				return ExitCodeError{Code: 2, Err: err}
 			}
 			for _, w := range cfg.Warnings {
-				cmd.PrintErrf("Warning: %s\n", w)
+				cmd.PrintErrf("Warning: %s\n", redact.Redact(w))
 			}
 			if len(cfg.IgnoredProjectKeys) > 0 {
 				cmd.PrintErrln("Ignored project config keys (security policy):")
 				for k, reason := range cfg.IgnoredProjectKeys {
-					cmd.PrintErrf("  - %s: %s\n", k, reason)
+					cmd.PrintErrf("  - %s: %s\n", redact.Redact(k), redact.Redact(reason))
 				}
 			}
 			data, err := json.MarshalIndent(cfg.Redacted(), "", "  ")
 			if err != nil {
 				return ExitCodeError{Code: 2, Err: err}
 			}
-			cmd.Println(string(data))
+			cmd.Println(redact.JSON(string(data)))
 			return nil
 		},
 	}
@@ -416,7 +417,7 @@ func newAuthLoginCmd() *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
 			defer cancel()
 			if testErr := mgr.TestConnection(ctx, provider, key, ""); testErr != nil {
-				cmd.PrintErrf("Warning: API key verification failed: %v\n", testErr)
+				cmd.PrintErrf("Warning: API key verification failed: %s\n", redact.Redact(testErr.Error()))
 			}
 
 			source, err := mgr.Store(provider, key, allowPlaintextFile)
@@ -785,7 +786,7 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 		return ExitCodeError{Code: 2, Err: fmt.Errorf("loading config: %w", err)}
 	}
 	for _, w := range cfg.Warnings {
-		fmt.Fprintf(os.Stderr, "Warning: %s\n", w)
+		fmt.Fprintf(os.Stderr, "Warning: %s\n", redact.Redact(w))
 	}
 
 	var overrideContextWindow int
@@ -874,17 +875,6 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 
 	if sessionID == "" {
 		sessionID = session.GenerateSessionID()
-		if store != nil {
-			_ = store.CreateSession(ctx, session.SessionRecord{
-				ID:        sessionID,
-				Workspace: session.CanonicalWorkspace(cfg.WorkspaceRoot),
-				Provider:  activeProvider,
-				Model:     activeModel,
-				Title:     session.TruncateTitle(prompt),
-				CreatedAt: time.Now(),
-				UpdatedAt: time.Now(),
-			})
-		}
 	}
 
 	var provider llm.Provider
@@ -952,13 +942,13 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 	ps, err := loadEffectivePolicy(cfg.WorkspaceRoot)
 	if err != nil {
 		if errors.Is(err, policy.ErrInvalidPolicy) {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error: %s\n", redact.Redact(err.Error()))
 			os.Exit(2)
 		}
 	}
 	if ps != nil && len(ps.Warnings) > 0 {
 		for _, w := range ps.Warnings {
-			fmt.Fprintf(os.Stderr, "%s\n", w)
+			fmt.Fprintf(os.Stderr, "%s\n", redact.Redact(w))
 		}
 	}
 
@@ -1032,8 +1022,19 @@ func runHeadless(ctx context.Context, prompt, outputFormat, permMode string, max
 	s := agent.NewLocal(sessionConfig)
 	defer s.Close()
 
+	prompt = redact.Redact(prompt)
 	if store != nil {
-		if resumedData != nil {
+		if resumedData == nil {
+			_ = store.CreateSession(ctx, session.SessionRecord{
+				ID:        sessionID,
+				Workspace: session.CanonicalWorkspace(cfg.WorkspaceRoot),
+				Provider:  activeProvider,
+				Model:     activeModel,
+				Title:     session.TruncateTitle(prompt),
+				CreatedAt: time.Now(),
+				UpdatedAt: time.Now(),
+			})
+		} else {
 			if err := store.UpdateSessionModel(ctx, sessionID, activeProvider, activeModel); err != nil {
 				return ExitCodeError{Code: 1, Err: fmt.Errorf("saving active session model: %w", err)}
 			}
@@ -1243,7 +1244,7 @@ func runInteractive(ctx context.Context) error {
 		return ExitCodeError{Code: 2, Err: fmt.Errorf("loading config: %w", err)}
 	}
 	for _, w := range cfg.Warnings {
-		fmt.Fprintf(os.Stderr, "Warning: %s\n", w)
+		fmt.Fprintf(os.Stderr, "Warning: %s\n", redact.Redact(w))
 	}
 
 	var overrideContextWindow int
@@ -1414,13 +1415,13 @@ func runInteractive(ctx context.Context) error {
 	ps, err := loadEffectivePolicy(cfg.WorkspaceRoot)
 	if err != nil {
 		if errors.Is(err, policy.ErrInvalidPolicy) {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error: %s\n", redact.Redact(err.Error()))
 			os.Exit(2)
 		}
 	}
 	if ps != nil && len(ps.Warnings) > 0 {
 		for _, w := range ps.Warnings {
-			fmt.Fprintf(os.Stderr, "%s\n", w)
+			fmt.Fprintf(os.Stderr, "%s\n", redact.Redact(w))
 		}
 	}
 
@@ -1550,7 +1551,7 @@ func main() {
 		var exitErr ExitCodeError
 		if errors.As(err, &exitErr) {
 			if exitErr.Err != nil && exitErr.Code != 0 {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", exitErr.Err)
+				fmt.Fprintf(os.Stderr, "Error: %s\n", exitErr.Error())
 			}
 			os.Exit(exitErr.Code)
 		}

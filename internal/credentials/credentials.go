@@ -313,24 +313,18 @@ func (m *Manager) deleteFallback(provider string) error {
 	return nil
 }
 
-// MaskKey returns a masked version of an API key revealing at most the trailing 4 characters.
+// MaskKey reports whether a key is set without displaying any characters from it.
 func MaskKey(key string) string {
 	key = strings.TrimSpace(key)
 	if key == "" {
 		return "(not set)"
 	}
-	if len(key) <= 4 {
-		return "****"
-	}
-	tail := key[len(key)-4:]
-	if strings.HasPrefix(key, "sk-") {
-		return "sk-..." + tail
-	}
-	return "..." + tail
+	return "****"
 }
 
 // TestConnection verifies an API key against a provider's endpoint using only read-only model-list requests.
 func (m *Manager) TestConnection(ctx context.Context, provider, key, baseURL string) error {
+	agent.RegisterSecret(key)
 	p := strings.ToLower(provider)
 	reqURL := ""
 	headers := make(http.Header)
@@ -381,7 +375,7 @@ func (m *Manager) TestConnection(ctx context.Context, provider, key, baseURL str
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
-		return fmt.Errorf("creating connection test request: %w", err)
+		return fmt.Errorf("creating connection test request: %s", agent.RedactSecrets(err.Error()))
 	}
 	for k, vv := range headers {
 		for _, v := range vv {
@@ -392,7 +386,7 @@ func (m *Manager) TestConnection(ctx context.Context, provider, key, baseURL str
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("connection failed (network unreachable or timeout): %w", err)
+		return fmt.Errorf("connection failed (network unreachable or timeout): %s", agent.RedactSecrets(err.Error()))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, resp.Body)

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ayushpatil0810/forge/internal/agent"
+	"github.com/ayushpatil0810/forge/internal/redact"
 	_ "modernc.org/sqlite"
 )
 
@@ -161,7 +162,7 @@ func (s *Store) UpdateSessionTitle(ctx context.Context, id, title string) error 
 	if err != nil {
 		return err
 	}
-	title = TruncateTitle(title)
+	title = TruncateTitle(sanitize(title))
 	if title == "" {
 		return nil
 	}
@@ -419,6 +420,7 @@ func (s *Store) GetMessages(ctx context.Context, sessionID string) ([]MessageRec
 		if toolCallID.Valid {
 			m.ToolCallID = toolCallID.String
 		}
+		m.Content = sanitize(m.Content)
 		msgs = append(msgs, m)
 	}
 	return msgs, rows.Err()
@@ -455,8 +457,8 @@ func (s *Store) SaveToolCall(ctx context.Context, tc ToolCallRecord) error {
 	_, err = db.ExecContext(ctx, query,
 		tc.ID,
 		tc.MessageID,
-		tc.Name,
-		sanitize(tc.Input),
+		sanitize(tc.Name),
+		redact.JSON(tc.Input),
 		capToolOutput(tc.Output),
 		tc.Status,
 		tc.DurationMs,
@@ -484,6 +486,7 @@ func (s *Store) GetToolCalls(ctx context.Context, messageID string) ([]ToolCallR
 		if err := rows.Scan(&tc.ID, &tc.MessageID, &tc.Name, &tc.Input, &tc.Output, &tc.Status, &tc.DurationMs, &tc.CreatedAt); err != nil {
 			return nil, err
 		}
+		tc.Name, tc.Input, tc.Output = sanitize(tc.Name), redact.JSON(tc.Input), sanitize(tc.Output)
 		tcs = append(tcs, tc)
 	}
 	return tcs, rows.Err()
@@ -602,7 +605,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		c.ID,
 		c.SessionID,
 		c.Tier,
-		c.Summary,
+		redact.JSON(c.Summary),
 		c.FirstMessageID,
 		c.LastMessageID,
 		c.TokensBefore,
@@ -670,6 +673,7 @@ FROM compactions WHERE session_id = ? ORDER BY created_at ASC`
 		); err != nil {
 			return nil, fmt.Errorf("scanning compaction row: %w", err)
 		}
+		c.Summary = redact.JSON(c.Summary)
 		compactions = append(compactions, c)
 	}
 	return compactions, rows.Err()

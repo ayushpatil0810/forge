@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,11 +14,41 @@ import (
 	"time"
 
 	"github.com/ayushpatil0810/forge/internal/credentials"
+	"github.com/ayushpatil0810/forge/internal/session"
 )
 
+func TestConfigAndAuthStatusHideCredentialValues(t *testing.T) {
+	t.Cleanup(resetCLIFlags)
+	t.Setenv("OPENAI_API_KEY", "forge-fixture \"credential\" tail314")
+	for _, args := range [][]string{
+		{"config", "--system-prompt", "diagnostic " + os.Getenv("OPENAI_API_KEY")},
+		{"auth", "status"},
+	} {
+		var output bytes.Buffer
+		cmd := newRootCmd()
+		cmd.SetOut(&output)
+		cmd.SetArgs(args)
+		if err := cmd.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(output.String(), "tail314") || strings.Contains(output.String(), "l314") {
+			t.Fatalf("%s exposed credential characters", args[0])
+		}
+		if args[0] == "config" && (!json.Valid(output.Bytes()) || !strings.Contains(output.String(), "[REDACTED:api_key]")) {
+			t.Fatal("config should print valid JSON with the credential redacted")
+		}
+		if args[0] == "auth" && !strings.Contains(output.String(), "****") {
+			t.Fatal("auth status should display the credential marker")
+		}
+	}
+}
+
 func TestSlice8_AuthAndHeadlessExitCheck(t *testing.T) {
+	t.Cleanup(resetCLIFlags)
 	// 1. Isolate environment
 	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "sessions.db")
+	t.Setenv("FORGE_SESSIONS_PATH", dbPath)
 	t.Setenv("HOME", tempDir)
 	t.Setenv("USERPROFILE", tempDir)
 	t.Setenv("ANTHROPIC_API_KEY", "")
@@ -42,9 +74,10 @@ func TestSlice8_AuthAndHeadlessExitCheck(t *testing.T) {
 		if !ok {
 			return
 		}
-		chunk := `data: {"id":"chatcmpl-test","choices":[{"delta":{"content":"Authenticated prompt succeeded!"},"finish_reason":null}]}` + "\n\n"
-		_, _ = w.Write([]byte(chunk))
-		flusher.Flush()
+		for _, text := range []string{"Authenticated prompt succeeded! " + expectedKey[:10], expectedKey[10:]} {
+			_, _ = fmt.Fprintf(w, "data: {\"id\":\"chatcmpl-test\",\"choices\":[{\"delta\":{\"content\":%q}}]}\n\n", text)
+			flusher.Flush()
+		}
 		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 		flusher.Flush()
 	}))
@@ -70,8 +103,8 @@ func TestSlice8_AuthAndHeadlessExitCheck(t *testing.T) {
 		t.Fatalf("expected resolved key %q, got %q", expectedKey, resolved.Key)
 	}
 	masked := credentials.MaskKey(resolved.Key)
-	if masked != "sk-...5432" {
-		t.Fatalf("expected masked key 'sk-...5432', got %q", masked)
+	if masked != "****" {
+		t.Fatal("auth status key marker must contain no key characters")
 	}
 
 	// 5. Run headless prompt against the mock server using credentials resolved from storage
@@ -91,7 +124,8 @@ func TestSlice8_AuthAndHeadlessExitCheck(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	runErr := runHeadless(ctx, "Hello auth test", "text", "", 2)
+	prefix := strings.Repeat("a", 51) + " "
+	runErr := runHeadless(ctx, prefix+expectedKey, "text", "", 2)
 
 	_ = wPipe.Close()
 	os.Stdout = oldStdout
@@ -108,7 +142,28 @@ func TestSlice8_AuthAndHeadlessExitCheck(t *testing.T) {
 		t.Fatalf("server received auth header %q, expected 'Bearer %s'", receivedAuthHeader, expectedKey)
 	}
 
-	if !strings.Contains(outputStr, "Authenticated prompt succeeded!") {
-		t.Fatalf("expected output to contain 'Authenticated prompt succeeded!', got:\n%s", outputStr)
+	const safeResponse = "Authenticated prompt succeeded! [REDACTED:secret]"
+	if strings.TrimSpace(outputStr) != safeResponse {
+		t.Fatal("headless text did not redact the split provider credential")
+	}
+	store, err := session.NewStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	rows, err := store.ListSessions(ctx, wsDir, false)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("expected a persisted session, got %d (%v)", len(rows), err)
+	}
+	safePrompt := prefix + "[REDACTED:secret]"
+	if rows[0].Title != session.TruncateTitle(safePrompt) {
+		t.Fatal("session title was truncated before redaction")
+	}
+	messages, err := store.GetMessages(ctx, rows[0].ID)
+	if err != nil || len(messages) != 2 {
+		t.Fatalf("expected a persisted conversation, got %d messages (%v)", len(messages), err)
+	}
+	if messages[0].Content != safePrompt || messages[1].Content != safeResponse {
+		t.Fatal("persisted conversation did not redact both messages")
 	}
 }

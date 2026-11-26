@@ -57,13 +57,14 @@ func NewLocal(cfg Config) Session {
 		id = fmt.Sprintf("s_%d", time.Now().UnixNano())
 	}
 	history := make([]llm.Message, len(cfg.History))
-	copy(history, cfg.History)
 	var seq atomic.Int64
 	for i := range history {
+		history[i] = redactMessage(cfg.History[i])
 		if history[i].ID == "" {
 			history[i].ID = fmt.Sprintf("msg_%d_%d", time.Now().UnixNano(), seq.Add(1))
 		}
 	}
+	cfg.History = nil
 	compactions := make([]CompactionRecord, len(cfg.Compactions))
 	copy(compactions, cfg.Compactions)
 
@@ -502,7 +503,7 @@ func (s *local) Resume(state ResumeState) error {
 		if msg.ID == "" {
 			msg.ID = fmt.Sprintf("msg_%d_%d", time.Now().UnixNano(), s.seq.Add(1))
 		}
-		s.history[i] = cloneMessage(msg)
+		s.history[i] = redactMessage(msg)
 	}
 	s.compactions = append([]CompactionRecord(nil), state.Compactions...)
 	s.usage = state.Usage
@@ -546,6 +547,17 @@ func (s *local) Respond(id string, d Decision, feedback ...string) error {
 
 // emit delivers an event, giving up only if the session is closed.
 func (s *local) emit(ev Event) {
+	if ev.Err != nil {
+		clean := *ev.Err
+		clean.Message = redact.Redact(clean.Message)
+		ev.Err = &clean
+	}
+	if ev.CompactionDone != nil {
+		clean := *ev.CompactionDone
+		clean.Error = redact.Redact(clean.Error)
+		ev.CompactionDone = &clean
+	}
+	ev.Notice = redact.Redact(ev.Notice)
 	ev.Seq = s.seq.Add(1)
 	select {
 	case s.events <- ev:
@@ -573,7 +585,7 @@ func (s *local) loop(ctx context.Context, prompt string) Event {
 	userMsg := llm.Message{
 		ID:   fmt.Sprintf("msg_%d_%d", time.Now().UnixNano(), s.seq.Add(1)),
 		Role: llm.RoleUser,
-		Text: prompt,
+		Text: redact.Redact(prompt),
 	}
 	s.history = append(s.history, userMsg)
 	s.mu.Unlock()
@@ -669,7 +681,7 @@ func (s *local) loop(ctx context.Context, prompt string) Event {
 		if msg.ID == "" {
 			msg.ID = fmt.Sprintf("msg_%d_%d", time.Now().UnixNano(), s.seq.Add(1))
 		}
-		s.history = append(s.history, msg)
+		s.history = append(s.history, redactMessage(msg))
 		if s.budgetExceeded {
 			s.mu.Unlock()
 			return Event{Type: EventDone, Done: &DonePayload{Reason: "budget_exceeded"}}
@@ -696,7 +708,7 @@ func (s *local) loop(ctx context.Context, prompt string) Event {
 					Type: EventError,
 					Err: &ErrorPayload{
 						Code:      "runaway_loop",
-						Message:   fmt.Sprintf("detected runaway loop: %d consecutive identical calls (%s)", consecutiveRepeats, RedactSecrets(currentSig)),
+						Message:   fmt.Sprintf("detected runaway loop: %d consecutive identical calls", consecutiveRepeats),
 						Guidance:  "Agent loop guard interrupted execution to prevent excessive API costs.",
 						Retryable: false,
 					},
@@ -785,7 +797,7 @@ func (s *local) streamModel(ctx context.Context, messages []llm.Message) (llm.Me
 	s.mu.Unlock()
 
 	ch, err := s.cfg.Provider.Stream(retryCtx, llm.Request{
-		System:    s.cfg.System,
+		System:    redact.Redact(s.cfg.System),
 		Messages:  messages,
 		Tools:     s.cfg.Tools.Specs(),
 		MaxTokens: s.cfg.MaxTokens,
@@ -795,16 +807,24 @@ func (s *local) streamModel(ctx context.Context, messages []llm.Message) (llm.Me
 	}
 	msg := llm.Message{Role: llm.RoleAssistant}
 	var text strings.Builder
+	tokens := redact.NewStream(func(chunk string) {
+		text.WriteString(chunk)
+		s.emit(Event{Type: EventTokenDelta, Token: &TokenDeltaPayload{Text: chunk}})
+	})
+	thinking := redact.NewStream(func(chunk string) {
+		s.emit(Event{Type: EventThinkingDelta, Thinking: &ThinkingDeltaPayload{Thinking: chunk}})
+	})
 	for ev := range ch {
 		switch ev.Type {
 		case llm.StreamText:
-			text.WriteString(ev.Text)
-			s.emit(Event{Type: EventTokenDelta, Token: &TokenDeltaPayload{Text: ev.Text}})
+			tokens.Write(ev.Text)
 		case llm.StreamThinking:
-			s.emit(Event{Type: EventThinkingDelta, Thinking: &ThinkingDeltaPayload{Thinking: ev.Text}})
+			thinking.Write(ev.Text)
 		case llm.StreamToolCall:
 			if ev.ToolCall != nil {
-				msg.ToolCalls = append(msg.ToolCalls, *ev.ToolCall)
+				call := *ev.ToolCall
+				call.ID = redactID(call.ID)
+				msg.ToolCalls = append(msg.ToolCalls, call)
 			}
 		case llm.StreamUsage:
 			if ev.Usage != nil {
@@ -843,37 +863,50 @@ func (s *local) streamModel(ctx context.Context, messages []llm.Message) (llm.Me
 				}
 			}
 		case llm.StreamError:
+			thinking.Flush()
+			tokens.Flush()
 			return msg, ev.Err
 		}
 	}
+	thinking.Flush()
+	tokens.Flush()
 	msg.Text = text.String()
 	return msg, nil
 }
 
 func (s *local) runToolCall(ctx context.Context, c llm.ToolCall) llm.Message {
-	te := ToolFinishedPayload{ID: c.ID, Name: c.Name, Status: ToolPending}
+	safeName, safeInput := redact.Redact(c.Name), redact.JSON(string(c.Input))
+	te := ToolFinishedPayload{ID: c.ID, Name: safeName, Status: ToolPending}
 	result := func(status ToolStatus, out string, errMsg string, start time.Time) llm.Message {
-		te.Status, te.Result, te.Error = status, out, errMsg
+		te.Status, te.Result, te.Error = status, redact.Redact(out), redact.Redact(errMsg)
 		if !start.IsZero() {
 			te.DurationMs = time.Since(start).Milliseconds()
 		}
 		s.emit(Event{Type: EventToolFinished, ToolDone: &te})
-		return llm.Message{Role: llm.RoleTool, ToolCallID: c.ID, Text: out, IsError: status != ToolOK}
+		return llm.Message{Role: llm.RoleTool, ToolCallID: c.ID, Text: te.Result, IsError: status != ToolOK}
 	}
 
+	s.emit(Event{Type: EventToolStarted, ToolStart: &ToolStartedPayload{ID: c.ID, Name: safeName, Input: safeInput}})
 	t, ok := s.cfg.Tools.Get(c.Name)
 	if !ok {
-		s.emit(Event{Type: EventToolStarted, ToolStart: &ToolStartedPayload{ID: c.ID, Name: c.Name, Input: string(c.Input)}})
 		return result(ToolError, fmt.Sprintf("unknown tool %q", c.Name), fmt.Sprintf("unknown tool %q", c.Name), time.Time{})
 	}
-
-	s.emit(Event{Type: EventToolStarted, ToolStart: &ToolStartedPayload{ID: c.ID, Name: c.Name, Input: string(c.Input)}})
 
 	if ctx.Err() != nil {
 		return result(ToolCancelled, "cancelled by user", "cancelled by user", time.Time{})
 	}
 
 	appReq := t.NeedsApproval(c.Input)
+	visible := appReq
+	visible.Description = redact.Redact(visible.Description)
+	visible.Diff = redact.Redact(visible.Diff)
+	visible.Path = redact.Redact(visible.Path)
+	visible.Command = redact.Redact(visible.Command)
+	visible.Cwd = redact.Redact(visible.Cwd)
+	sensitive := safeInput != string(c.Input) || safeName != c.Name || visible != appReq
+	if sensitive {
+		appReq.IsProtected = true
+	}
 	var evalRes policy.EvalResult
 	if s.cfg.PolicySet != nil {
 		evalRes = policy.Evaluate(policy.EvalRequest{
@@ -895,7 +928,7 @@ func (s *local) runToolCall(ctx context.Context, c llm.ToolCall) llm.Message {
 		}
 	}
 
-	if evalRes.Verdict == permission.Ask && s.isAlwaysAllowed(c.Name) && !evalRes.IsFloor {
+	if evalRes.Verdict == permission.Ask && s.isAlwaysAllowed(c.Name) && !evalRes.IsFloor && !sensitive {
 		evalRes.Verdict = permission.Allow
 		evalRes.Source = "session"
 	}
@@ -910,9 +943,13 @@ func (s *local) runToolCall(ctx context.Context, c llm.ToolCall) llm.Message {
 		if evalRes.IsFloor {
 			appReq.IsDangerous = true
 		}
-		resp, err := s.awaitApproval(ctx, c.ID, c.Name, string(c.Input), appReq)
+		visible.IsProtected, visible.IsDangerous = appReq.IsProtected, appReq.IsDangerous
+		resp, err := s.awaitApproval(ctx, c.ID, safeName, safeInput, visible)
 		if err != nil {
 			return result(ToolCancelled, "cancelled by user", "cancelled by user", time.Time{})
+		}
+		if sensitive && (resp.decision == DecisionAllowSession || resp.decision == DecisionAlwaysAllow) {
+			resp.decision = DecisionAllow
 		}
 		switch resp.decision {
 		case DecisionDeny:
@@ -971,11 +1008,15 @@ func (s *local) runToolCall(ctx context.Context, c llm.ToolCall) llm.Message {
 			if needCheckpoint {
 				info, err := s.cfg.Checkpointer.Create(ctx, fmt.Sprintf("Before %s in turn", c.Name))
 				if err == nil {
+					files := make([]string, len(info.SkippedFiles))
+					for i, path := range info.SkippedFiles {
+						files[i] = redact.Redact(path)
+					}
 					s.emit(Event{
 						Type: EventCheckpointCreated,
 						Checkpt: &CheckpointCreatedPayload{
 							ID:    info.ID,
-							Files: info.SkippedFiles,
+							Files: files,
 						},
 					})
 				}
