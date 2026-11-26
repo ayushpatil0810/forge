@@ -91,10 +91,21 @@ type Session interface {
 	Checkpointer() Checkpointer
 	// PolicySet returns the active policy rules, if configured.
 	PolicySet() *policy.PolicySet
-	// SetProvider dynamically updates the active LLM provider.
-	SetProvider(p llm.Provider)
+	// SetProvider updates the active model and context window between turns.
+	SetProvider(p llm.Provider, window int) error
+	// Resume replaces the conversation between turns, retaining workspace tools and policies.
+	Resume(state ResumeState) error
 	// Close cancels, waits for the turn to stop, then closes Events.
 	Close()
+}
+
+type ResumeState struct {
+	ID            string
+	History       []llm.Message
+	Compactions   []CompactionRecord
+	Provider      llm.Provider
+	ContextWindow int
+	Usage         Usage
 }
 
 // CheckpointInfo contains metadata about a recorded or restored snapshot.
@@ -138,7 +149,6 @@ type Config struct {
 	MaxCostBudget      float64
 	MaxTokensBudget    int
 	SessionStore       CompactionStore
-	InitialTokens      int
-	InitialCost        float64
+	InitialUsage       Usage
 	Compactions        []CompactionRecord
 }

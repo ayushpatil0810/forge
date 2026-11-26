@@ -83,10 +83,7 @@ func NewLocal(cfg Config) Session {
 			Window: cfg.ContextWindow,
 			Known:  cfg.ContextWindow > 0,
 		},
-		usage: UsageUpdatedPayload{
-			InputTokens: cfg.InitialTokens,
-			Cost:        cfg.InitialCost,
-		},
+		usage: cfg.InitialUsage,
 	}
 }
 
@@ -126,7 +123,11 @@ type local struct {
 	auditWarned           bool
 }
 
-func (s *local) ID() string { return s.id }
+func (s *local) ID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.id
+}
 
 func (s *local) PolicySet() *policy.PolicySet { return s.cfg.PolicySet }
 
@@ -320,6 +321,8 @@ func (s *local) compactLocked(ctx context.Context, requestedTier int, reason str
 		if s.contextUsage.Window > 0 {
 			s.contextUsage.Percent = (tokensAfter * 100) / s.contextUsage.Window
 		}
+		contextUsage := s.contextUsage
+		s.emit(Event{Type: EventContextUsageUpdated, ContextUsage: &contextUsage})
 		s.emit(Event{
 			Type: EventCompactionFinished,
 			CompactionDone: &CompactionFinishedPayload{
@@ -330,7 +333,6 @@ func (s *local) compactLocked(ctx context.Context, requestedTier int, reason str
 				OK:           true,
 			},
 		})
-		s.emit(Event{Type: EventContextUsageUpdated, ContextUsage: &s.contextUsage})
 		return nil
 	}
 
@@ -354,6 +356,8 @@ func (s *local) compactLocked(ctx context.Context, requestedTier int, reason str
 		if s.contextUsage.Window > 0 {
 			s.contextUsage.Percent = (tokensAfter * 100) / s.contextUsage.Window
 		}
+		contextUsage := s.contextUsage
+		s.emit(Event{Type: EventContextUsageUpdated, ContextUsage: &contextUsage})
 		s.emit(Event{
 			Type: EventCompactionFinished,
 			CompactionDone: &CompactionFinishedPayload{
@@ -365,7 +369,6 @@ func (s *local) compactLocked(ctx context.Context, requestedTier int, reason str
 				Error:        err.Error(),
 			},
 		})
-		s.emit(Event{Type: EventContextUsageUpdated, ContextUsage: &s.contextUsage})
 
 		if s.contextUsage.Window > 0 && tokensAfter >= int(s.cfg.EmergencyThreshold*float64(s.contextUsage.Window)) {
 			return fmt.Errorf("context length %d exceeds emergency threshold (92%%) and automatic summarization was unavailable: %w", tokensAfter, err)
@@ -430,6 +433,8 @@ func (s *local) compactLocked(ctx context.Context, requestedTier int, reason str
 		s.contextUsage.Percent = (tokensAfter * 100) / s.contextUsage.Window
 	}
 
+	contextUsage := s.contextUsage
+	s.emit(Event{Type: EventContextUsageUpdated, ContextUsage: &contextUsage})
 	s.emit(Event{
 		Type: EventCompactionFinished,
 		CompactionDone: &CompactionFinishedPayload{
@@ -440,7 +445,6 @@ func (s *local) compactLocked(ctx context.Context, requestedTier int, reason str
 			OK:           true,
 		},
 	})
-	s.emit(Event{Type: EventContextUsageUpdated, ContextUsage: &s.contextUsage})
 	return nil
 }
 
@@ -460,10 +464,54 @@ func (s *local) Checkpointer() Checkpointer {
 	return s.cfg.Checkpointer
 }
 
-func (s *local) SetProvider(p llm.Provider) {
+func (s *local) SetProvider(p llm.Provider, window int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.setProvider(p, window, s.history, s.compactions)
+}
+
+func (s *local) setProvider(p llm.Provider, window int, history []llm.Message, compactions []CompactionRecord) error {
+	if s.isClosed {
+		return ErrClosed
+	}
+	if s.running {
+		return ErrBusy
+	}
+	used := EstimateChars(BuildModelView(history, compactions), s.cfg.System, s.cfg.Tools.Specs()) / 4
+	if window > 0 && used > window {
+		return fmt.Errorf("session history exceeds model context window (%d > %d tokens)", used, window)
+	}
 	s.cfg.Provider = p
+	s.contextUsage = ContextUsage{Window: window, Known: window > 0, Used: used}
+	if window > 0 {
+		s.contextUsage.Percent = used * 100 / window
+	}
+	s.calibratedRatio = 0.25
+	return nil
+}
+
+func (s *local) Resume(state ResumeState) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.setProvider(state.Provider, state.ContextWindow, state.History, state.Compactions); err != nil {
+		return err
+	}
+	s.id = state.ID
+	s.history = make([]llm.Message, len(state.History))
+	for i, msg := range state.History {
+		if msg.ID == "" {
+			msg.ID = fmt.Sprintf("msg_%d_%d", time.Now().UnixNano(), s.seq.Add(1))
+		}
+		s.history[i] = cloneMessage(msg)
+	}
+	s.compactions = append([]CompactionRecord(nil), state.Compactions...)
+	s.usage = state.Usage
+	s.always = make(map[string]bool)
+	if s.cfg.Policy.Mode != permission.ModePlan {
+		s.cfg.Policy.Mode = permission.ModeDefault
+	}
+	s.cfg.Tools.Tracker().Reset()
+	return nil
 }
 
 func (s *local) Close() {

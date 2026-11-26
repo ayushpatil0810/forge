@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -60,8 +61,7 @@ func ValidateWorkspaceBinding(sessionWorkspace, currentWorkspace, sessionID stri
 	canSess := CanonicalWorkspace(sessionWorkspace)
 	canCurr := CanonicalWorkspace(currentWorkspace)
 
-	// Case-insensitive comparison on Windows
-	if strings.EqualFold(canSess, canCurr) {
+	if canSess == canCurr || (runtime.GOOS == "windows" && strings.EqualFold(canSess, canCurr)) {
 		return nil
 	}
 
@@ -87,7 +87,9 @@ type ResumedSessionData struct {
 	Checkpoints    []CheckpointRecord
 	Usage          []UsageRecord
 	Compactions    []CompactionRecord
+	History        []llm.Message
 	LLMMessages    []llm.Message
+	TotalUsage     agent.Usage
 	TotalCost      float64
 	TotalTokens    int
 }
@@ -119,11 +121,11 @@ func LoadResumedSession(ctx context.Context, store *Store, sessionID string) (*R
 	usageList, _ := store.GetUsage(ctx, sessionID)
 	compactions, _ := store.GetCompactions(ctx, sessionID)
 
-	var totalCost float64
-	var totalTokens int
+	var total agent.Usage
 	for _, u := range usageList {
-		totalCost += u.Cost
-		totalTokens += (u.InputTokens + u.OutputTokens)
+		total.Cost += u.Cost
+		total.InputTokens += u.InputTokens
+		total.OutputTokens += u.OutputTokens
 	}
 
 	// Synthesize interrupted tool calls if dangling
@@ -169,8 +171,8 @@ func LoadResumedSession(ctx context.Context, store *Store, sessionID string) (*R
 	}
 
 	// Inject the resume system note into conversation history
-	note := ResumeSystemNote(sessionID)
-	llmMsgs = append(llmMsgs, llm.Message{Role: llm.RoleUser, Text: note})
+	note := llm.Message{Role: llm.RoleUser, Text: ResumeSystemNote(sessionID)}
+	llmMsgs = append(llmMsgs, note)
 
 	return &ResumedSessionData{
 		Session:        *rec,
@@ -179,9 +181,11 @@ func LoadResumedSession(ctx context.Context, store *Store, sessionID string) (*R
 		Checkpoints:    checkpoints,
 		Usage:          usageList,
 		Compactions:    compactions,
+		History:        append(rawLLMMsgs, note),
 		LLMMessages:    llmMsgs,
-		TotalCost:      totalCost,
-		TotalTokens:    totalTokens,
+		TotalUsage:     total,
+		TotalCost:      total.Cost,
+		TotalTokens:    total.InputTokens + total.OutputTokens,
 	}, nil
 }
 

@@ -117,7 +117,11 @@ func (w *WizardState) Update(msg tea.Msg) (bool, tea.Cmd) {
 				}
 				// Save key to OS keychain
 				mgr := credentials.NewManager(nil)
-				_, _ = mgr.Store(p, w.KeyInput, false)
+				if _, err := mgr.Store(p, w.KeyInput, false); err != nil {
+					w.StatusMsg = "Could not save the API key. Check the OS keychain and try again."
+					return false, nil
+				}
+				w.KeyInput = ""
 			}
 			w.StatusMsg = ""
 			w.Step = wizardStepModel

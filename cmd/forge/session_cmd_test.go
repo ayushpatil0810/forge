@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,28 @@ import (
 	"github.com/ayushpatil0810/forge/internal/checkpoint"
 	"github.com/ayushpatil0810/forge/internal/session"
 )
+
+func TestRunResumeRequiresSavedWorkspaceEvenWithRootFlag(t *testing.T) {
+	t.Cleanup(resetCLIFlags)
+	dbPath := filepath.Join(t.TempDir(), "sessions.db")
+	t.Setenv("FORGE_SESSIONS_PATH", dbPath)
+	store, err := session.NewStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.CreateSession(t.Context(), session.SessionRecord{
+		ID: "saved", Workspace: session.CanonicalWorkspace(t.TempDir()), Provider: "mock", Model: "demo",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"run", "--demo", "--resume", "saved", "--root", t.TempDir(), "continue"})
+	var exit ExitCodeError
+	if err := cmd.ExecuteContext(t.Context()); !errors.As(err, &exit) || exit.Code != 1 || !strings.Contains(err.Error(), "belongs to workspace") {
+		t.Fatalf("expected workspace mismatch, got %v", err)
+	}
+}
 
 func TestSessionsCmd_ListShowDeletePrune(t *testing.T) {
 	tempDir := t.TempDir()

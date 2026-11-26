@@ -230,14 +230,21 @@ func (s *Store) CreateSession(ctx context.Context, rec SessionRecord) error {
 	return err
 }
 
-// UpdateSession updates session title, model, and updated_at.
-func (s *Store) UpdateSession(ctx context.Context, id, title, model string, updatedAt time.Time) error {
+// UpdateSessionModel records the provider and model used for the next turn.
+func (s *Store) UpdateSessionModel(ctx context.Context, id, provider, model string) error {
 	db, err := s.Open()
 	if err != nil {
 		return err
 	}
-	query := `UPDATE sessions SET title = ?, model = ?, updated_at = ? WHERE id = ?`
-	_, err = db.ExecContext(ctx, query, sanitize(title), model, updatedAt.UTC(), id)
+	query := `UPDATE sessions SET provider = ?, model = ?, updated_at = ? WHERE id = ?`
+	result, err := db.ExecContext(ctx, query, provider, model, time.Now().UTC(), id)
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err == nil && n == 0 {
+		return fmt.Errorf("session %q not found", id)
+	}
 	return err
 }
 

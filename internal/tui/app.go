@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -154,6 +155,7 @@ type Model struct {
 	currentResponse  string
 	activityLabel    string
 	isStreaming      bool
+	turnPending      bool
 	manualCompaction bool
 	renderPending    bool
 	inputTokens      int
@@ -180,6 +182,7 @@ type Model struct {
 	sessionPicker         *SessionPicker
 	securityNotices       []string
 	contextUsage          agent.ContextUsage
+	contextWindowOverride int
 	maxCostBudget         float64
 	maxTokensBudget       int
 	compactionTokens      int
@@ -249,6 +252,10 @@ func (m *Model) SetBaseURL(url string) {
 	m.baseURL = url
 }
 
+func (m *Model) SetContextWindowOverride(window int) {
+	m.contextWindowOverride = window
+}
+
 func (m *Model) SetWizard(w *WizardState) {
 	m.wizard = w
 }
@@ -259,57 +266,91 @@ func (m *Model) SetSetupRequired(required bool) {
 }
 
 func (m *Model) applyWizardSelection() {
-	m.providerName = m.wizard.CurrentProvider()
-	m.modelName = m.wizard.SelectedModel()
-	if m.modelName == "" {
+	provider, model := m.wizard.CurrentProvider(), m.wizard.SelectedModel()
+	if model == "" {
 		m.items = append(m.items, errorMessage{text: "Enter a model ID before continuing."})
 		return
 	}
-	m.baseURL = baseURLForProvider(m.providerName, m.baseURL)
 	cw := m.wizard.ContextWindow()
-	pi := m.wizard.PriceIn()
-	po := m.wizard.PriceOut()
-	if err := config.SaveUserModel(m.providerName, m.modelName, m.baseURL, cw, pi, po); err != nil {
-		m.items = append(m.items, errorMessage{text: "Could not save model metadata: " + err.Error()})
-	}
-	if err := config.SaveUserSelection(m.providerName, m.modelName, m.baseURL); err != nil {
-		m.items = append(m.items, errorMessage{text: "Could not save model choice: " + err.Error()})
-	}
-	cred := credentials.NewManager(nil).Resolve(m.providerName)
-	p, err := llm.NewProvider(llm.ProviderConfig{
-		Provider: m.providerName,
-		Model:    m.modelName,
-		BaseURL:  m.baseURL,
-		APIKey:   cred.Key,
-	})
-	if err != nil {
+	if err := m.switchModel(provider, model, m.modelWindow(provider, model, cw)); err != nil {
 		m.items = append(m.items, errorMessage{text: err.Error()})
 		return
 	}
-	m.session.SetProvider(p)
+	if err := config.SaveUserModel(provider, model, m.baseURL, cw, m.wizard.PriceIn(), m.wizard.PriceOut()); err != nil {
+		m.items = append(m.items, errorMessage{text: "Model changed for this session. Could not save the selection: " + err.Error()})
+	}
 	m.setupRequired = false
 }
 
-func baseURLForProvider(provider, current string) string {
-	const ollama = "http://127.0.0.1:11434"
-	const lmstudio = "http://127.0.0.1:1234/v1"
-	switch strings.ToLower(provider) {
-	case "ollama":
-		if current == "" || current == lmstudio {
-			return ollama
-		}
-		return current
-	case "lmstudio":
-		if current == "" || current == ollama {
-			return lmstudio
-		}
-		return current
-	default:
-		if current == ollama || current == lmstudio {
-			return ""
-		}
-		return current
+func (m *Model) modelWindow(provider, model string, userWindow int) int {
+	if userWindow <= 0 && m.contextWindowOverride <= 0 {
+		cfg, _ := config.Load(config.LoadOptions{WorkspaceRoot: m.workspaceRoot})
+		userWindow = cfg.Models[config.ModelKey(provider, model)].ContextWindow
 	}
+	return llm.ResolveContextInfo(provider, model, m.contextWindowOverride, userWindow, 0).Window
+}
+
+func openModel(provider, model, baseURL string) (llm.Provider, error) {
+	cred := credentials.NewManager(nil).Resolve(provider)
+	return llm.NewProvider(llm.ProviderConfig{Provider: provider, Model: model, BaseURL: baseURL, APIKey: cred.Key})
+}
+
+func (m *Model) switchModel(provider, model string, window int) error {
+	baseURL := ""
+	if strings.EqualFold(provider, m.providerName) {
+		baseURL = m.baseURL
+	}
+	p, err := openModel(provider, model, baseURL)
+	if err != nil {
+		return err
+	}
+	if err := m.session.SetProvider(p, window); err != nil {
+		return err
+	}
+	m.SetProviderInfo(provider, model)
+	m.baseURL = baseURL
+	m.contextUsage = m.session.ContextUsage()
+	m.pendingModelSwitch = ""
+	m.setupRequired = false
+	return nil
+}
+
+func (m *Model) resumeSession(id string) error {
+	if m.store == nil || m.noSession {
+		return errors.New("session storage is unavailable")
+	}
+	data, err := session.LoadResumedSession(context.Background(), m.store, id)
+	if err != nil {
+		return err
+	}
+	if err := session.ValidateWorkspaceBinding(data.Session.Workspace, m.workspaceRoot, id); err != nil {
+		return err
+	}
+	// shortcut: saved sessions identify provider kinds only, verify the endpoint when sessions record a profile.
+	if m.setupRequired || !strings.EqualFold(data.Session.Provider, m.providerName) {
+		return fmt.Errorf("select the session's provider %q before resuming", data.Session.Provider)
+	}
+	if data.Session.Model == "" {
+		return errors.New("the saved session has no model")
+	}
+	p, err := openModel(m.providerName, data.Session.Model, m.baseURL)
+	if err != nil {
+		return err
+	}
+	state := agent.ResumeState{
+		ID: id, History: data.History, Compactions: data.Compactions,
+		Provider: p, ContextWindow: m.modelWindow(m.providerName, data.Session.Model, 0), Usage: data.TotalUsage,
+	}
+	if err := m.session.Resume(state); err != nil {
+		return err
+	}
+	m.modelName = data.Session.Model
+	m.contextUsage = m.session.ContextUsage()
+	m.pendingModelSwitch = ""
+	m.currentResponse = ""
+	m.activityLabel = "Ready"
+	m.RestoreSession(data)
+	return nil
 }
 
 func (m *Model) SetWorkspaceRoot(root string) {
@@ -338,11 +379,11 @@ func (m *Model) SetSecurityNotices(notices []string) {
 func (m *Model) RestoreSession(data *session.ResumedSessionData) {
 	m.items = nil
 	m.toolCards = make(map[string]*ToolCard)
-	m.cost = data.TotalCost
-	m.inputTokens = data.TotalTokens / 2
-	m.outputTokens = data.TotalTokens / 2
-	m.providerName = data.Session.Provider
-	m.modelName = data.Session.Model
+	m.cost = data.TotalUsage.Cost
+	m.inputTokens = data.TotalUsage.InputTokens
+	m.outputTokens = data.TotalUsage.OutputTokens
+	m.compactionTokens = data.TotalUsage.CompactionTokens
+	m.compactionCost = data.TotalUsage.CompactionCost
 
 	for _, msg := range data.Messages {
 		switch msg.Role {
@@ -448,24 +489,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if done {
 				m.sessionPicker = nil
 				if selectedID != "" {
-					store, err := session.NewStore("")
-					if err == nil {
-						resumed, err := session.LoadResumedSession(context.Background(), store, selectedID)
-						if err == nil {
-							m.RestoreSession(resumed)
-							credMgr := credentials.NewManager(nil)
-							cred := credMgr.Resolve(resumed.Session.Provider)
-							if p, err := llm.NewProvider(llm.ProviderConfig{
-								Provider: resumed.Session.Provider,
-								Model:    resumed.Session.Model,
-								BaseURL:  m.baseURL,
-								APIKey:   cred.Key,
-							}); err == nil {
-								m.session.SetProvider(p)
-							}
-						} else {
-							m.items = append(m.items, errorMessage{text: fmt.Sprintf("Failed to resume session: %v", err)})
-						}
+					if err := m.resumeSession(selectedID); err != nil {
+						m.items = append(m.items, errorMessage{text: fmt.Sprintf("Failed to resume session: %v", err)})
 					}
 				}
 				m.textarea.Focus()
@@ -670,7 +695,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			input := strings.TrimSpace(m.textarea.Value())
-			if input == "" || m.isStreaming {
+			if input == "" || m.isStreaming || m.turnPending {
 				return m, nil
 			}
 
@@ -858,7 +883,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.items = append(m.items, systemMessage{text: msg})
 				} else {
 					targetModel := parts[1]
-					targetInfo := llm.ResolveContextInfo(m.providerName, targetModel, 0, 0, 0)
+					targetWindow := m.modelWindow(m.providerName, targetModel, 0)
 					u := m.session.ContextUsage()
 					approxTokens := u.Used
 					if approxTokens == 0 {
@@ -868,32 +893,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						approxTokens = m.inputTokens + m.outputTokens
 					}
 					forced := len(parts) > 2 && parts[2] == "--force"
-					if targetInfo.Known && targetInfo.Window > 0 {
-						if approxTokens > targetInfo.Window {
-							m.items = append(m.items, errorMessage{text: fmt.Sprintf("Cannot switch to model %q: current conversation (~%d tokens) exceeds model context window (%d tokens).", targetModel, approxTokens, targetInfo.Window)})
+					if targetWindow > 0 {
+						if approxTokens > targetWindow {
+							m.items = append(m.items, errorMessage{text: fmt.Sprintf("Cannot switch to model %q: current conversation (~%d tokens) exceeds model context window (%d tokens).", targetModel, approxTokens, targetWindow)})
 							m.updateViewportContent()
 							return m, nil
 						}
-						if approxTokens > targetInfo.Window*8/10 && !forced && m.pendingModelSwitch != targetModel {
+						if approxTokens > targetWindow*8/10 && !forced && m.pendingModelSwitch != targetModel {
 							m.pendingModelSwitch = targetModel
-							m.items = append(m.items, systemMessage{text: fmt.Sprintf("Warning: current conversation (~%d tokens) exceeds 80%% of %s's window (%d tokens).\nRun /compact first to compact context, or type /model %s --force to switch anyway.", approxTokens, targetModel, targetInfo.Window, targetModel)})
+							m.items = append(m.items, systemMessage{text: fmt.Sprintf("Warning: current conversation (~%d tokens) exceeds 80%% of %s's window (%d tokens).\nRun /compact first to compact context, or type /model %s --force to switch anyway.", approxTokens, targetModel, targetWindow, targetModel)})
 							m.updateViewportContent()
 							return m, nil
 						}
 					}
-					m.pendingModelSwitch = ""
-					m.modelName = targetModel
-					credMgr := credentials.NewManager(nil)
-					cred := credMgr.Resolve(m.providerName)
-					if p, err := llm.NewProvider(llm.ProviderConfig{
-						Provider: m.providerName,
-						Model:    m.modelName,
-						BaseURL:  m.baseURL,
-						APIKey:   cred.Key,
-					}); err == nil {
-						m.session.SetProvider(p)
+					if err := m.switchModel(m.providerName, targetModel, targetWindow); err != nil {
+						m.items = append(m.items, errorMessage{text: "Could not switch model: " + err.Error()})
+					} else {
+						m.items = append(m.items, systemMessage{text: fmt.Sprintf("Switched active model to %s.", targetModel)})
 					}
-					m.items = append(m.items, systemMessage{text: fmt.Sprintf("Switched active model to %s.", targetModel)})
 				}
 				m.updateViewportContent()
 				return m, nil
@@ -981,32 +998,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.items = append(m.items, userMessage{text: input})
 				m.textarea.Reset()
 				parts := strings.Fields(input)
-				store, err := session.NewStore("")
-				if err != nil {
-					m.items = append(m.items, errorMessage{text: fmt.Sprintf("failed to open session store: %v", err)})
-					m.updateViewportContent()
-					return m, nil
-				}
-				if len(parts) > 1 {
-					targetID := parts[1]
-					resumed, err := session.LoadResumedSession(context.Background(), store, targetID)
-					if err != nil {
-						m.items = append(m.items, errorMessage{text: fmt.Sprintf("failed to resume session %q: %v", targetID, err)})
-					} else {
-						m.RestoreSession(resumed)
-						credMgr := credentials.NewManager(nil)
-						cred := credMgr.Resolve(resumed.Session.Provider)
-						if p, err := llm.NewProvider(llm.ProviderConfig{
-							Provider: resumed.Session.Provider,
-							Model:    resumed.Session.Model,
-							BaseURL:  m.baseURL,
-							APIKey:   cred.Key,
-						}); err == nil {
-							m.session.SetProvider(p)
-						}
+				if m.store == nil || m.noSession {
+					m.items = append(m.items, errorMessage{text: "Session storage is unavailable."})
+				} else if len(parts) > 1 {
+					if err := m.resumeSession(parts[1]); err != nil {
+						m.items = append(m.items, errorMessage{text: fmt.Sprintf("Failed to resume session: %v", err)})
 					}
 				} else {
-					list, err := store.ListSessions(context.Background(), m.workspaceRoot, false)
+					list, err := m.store.ListSessions(context.Background(), session.CanonicalWorkspace(m.workspaceRoot), false)
 					if err != nil {
 						m.items = append(m.items, errorMessage{text: fmt.Sprintf("failed to list sessions: %v", err)})
 					} else {
@@ -1035,19 +1034,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.items = append(m.items, systemMessage{text: sb.String()})
 				} else {
 					targetProvider := strings.ToLower(parts[1])
-					m.providerName = targetProvider
-					m.modelName = config.DefaultModelForProvider(targetProvider)
-					credMgr := credentials.NewManager(nil)
-					cred := credMgr.Resolve(m.providerName)
-					if p, err := llm.NewProvider(llm.ProviderConfig{
-						Provider: m.providerName,
-						Model:    m.modelName,
-						BaseURL:  m.baseURL,
-						APIKey:   cred.Key,
-					}); err == nil {
-						m.session.SetProvider(p)
+					targetModel := config.DefaultModelForProvider(targetProvider)
+					if err := m.switchModel(targetProvider, targetModel, m.modelWindow(targetProvider, targetModel, 0)); err != nil {
+						m.items = append(m.items, errorMessage{text: "Could not switch provider: " + err.Error()})
+					} else {
+						m.items = append(m.items, systemMessage{text: fmt.Sprintf("Switched active provider to %s (default model: %s).", targetProvider, targetModel)})
 					}
-					m.items = append(m.items, systemMessage{text: fmt.Sprintf("Switched active provider to %s (default model: %s).", targetProvider, m.modelName)})
 				}
 				m.updateViewportContent()
 				return m, nil
@@ -1104,6 +1096,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateViewportContent()
 
 			if m.store != nil && !m.noSession {
+				if err := m.store.UpdateSessionModel(context.Background(), m.session.ID(), m.providerName, m.modelName); err != nil {
+					m.isStreaming = false
+					m.activityLabel = "Ready"
+					m.items = append(m.items, errorMessage{text: "Could not save the active model for this session: " + err.Error()})
+					m.updateViewportContent()
+					return m, nil
+				}
 				msgID := fmt.Sprintf("msg_%d_u", time.Now().UnixNano())
 				_ = m.store.SaveMessage(context.Background(), session.MessageRecord{
 					ID:        msgID,
@@ -1119,6 +1118,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.isStreaming = false
 				m.items = append(m.items, errorMessage{text: "Send error: " + err.Error()})
 				m.updateViewportContent()
+			} else {
+				m.turnPending = true
 			}
 			return m, nil
 		}
@@ -1243,6 +1244,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case agent.EventUsageUpdated:
 			if ev.Usage != nil {
+				inputTokens := ev.Usage.InputTokens - m.inputTokens
+				outputTokens := ev.Usage.OutputTokens - m.outputTokens
+				cost := ev.Usage.Cost - m.cost
 				m.inputTokens = ev.Usage.InputTokens
 				m.outputTokens = ev.Usage.OutputTokens
 				m.cost = ev.Usage.Cost
@@ -1252,9 +1256,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					_ = m.store.SaveUsage(context.Background(), session.UsageRecord{
 						SessionID:    m.session.ID(),
 						Model:        m.modelName,
-						InputTokens:  ev.Usage.InputTokens,
-						OutputTokens: ev.Usage.OutputTokens,
-						Cost:         ev.Usage.Cost,
+						InputTokens:  inputTokens,
+						OutputTokens: outputTokens,
+						Cost:         cost,
 						CreatedAt:    time.Now(),
 					})
 				}
@@ -1294,6 +1298,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case agent.EventDone:
 			m.isStreaming = false
+			m.turnPending = false
 			m.pendingApproval = nil
 			m.textarea.Focus()
 			m.activityLabel = "Ready"
@@ -1329,6 +1334,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case agent.EventError:
 			m.isStreaming = false
+			m.turnPending = false
 			m.pendingApproval = nil
 			m.textarea.Focus()
 			m.activityLabel = "Error"
